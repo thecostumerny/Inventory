@@ -408,6 +408,30 @@
     }
 
     #status { margin-top: 18px; min-height: 1.4em; text-align: center; }
+
+    /* Login PIN pad */
+    .pin-box { max-width: 340px; margin: 0 auto; }
+    .pin-dots {
+      display: flex; justify-content: center; align-items: center; gap: 12px;
+      height: 44px; margin-bottom: 14px;
+    }
+    .pin-dots span {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--text);
+    }
+    .pin-dots .hint { width: auto; height: auto; background: none; color: var(--border); font-size: 1rem; letter-spacing: 0; }
+    .pin-dots.shake { animation: pinShake 0.35s; }
+    @keyframes pinShake {
+      20%, 60% { transform: translateX(-8px); }
+      40%, 80% { transform: translateX(8px); }
+    }
+    .pin-pad { margin-top: 0; }
+    .pin-go {
+      display: block; width: 100%; margin-top: 12px; padding: 16px 0;
+      font-size: 1.2rem; font-weight: bold; color: #fff;
+      background: var(--accent); border: none; border-radius: 10px; cursor: pointer;
+    }
+    .pin-go:disabled { opacity: 0.4; cursor: default; }
     input[type=password] {
       flex: 1;
       min-width: 0;
@@ -632,11 +656,24 @@
 
     <!-- Step 0: Login -->
     <div class="step" id="stepLogin">
-      <h2>Enter the password</h2>
-      <div class="input-row">
-        <input type="password" id="passInput" autocomplete="current-password"
-               placeholder="Password" onkeydown="if(event.key==='Enter') submitLogin()">
-        <button class="go-btn" id="loginGo" onclick="submitLogin()">Log in</button>
+      <h2>Enter your code</h2>
+      <div class="pin-box">
+        <div class="pin-dots" id="pinDots" aria-label="Code entered"></div>
+        <div class="numpad pin-pad" id="pinPad">
+          <button type="button" tabindex="-1" data-k="1">1</button>
+          <button type="button" tabindex="-1" data-k="2">2</button>
+          <button type="button" tabindex="-1" data-k="3">3</button>
+          <button type="button" tabindex="-1" data-k="4">4</button>
+          <button type="button" tabindex="-1" data-k="5">5</button>
+          <button type="button" tabindex="-1" data-k="6">6</button>
+          <button type="button" tabindex="-1" data-k="7">7</button>
+          <button type="button" tabindex="-1" data-k="8">8</button>
+          <button type="button" tabindex="-1" data-k="9">9</button>
+          <button type="button" tabindex="-1" data-k="clear" class="fn">Clear</button>
+          <button type="button" tabindex="-1" data-k="0">0</button>
+          <button type="button" tabindex="-1" data-k="back" class="fn">&#9003;</button>
+        </div>
+        <button type="button" class="pin-go" id="loginGo" onclick="submitLogin()" disabled>Log in</button>
       </div>
     </div>
 
@@ -779,7 +816,7 @@
       if (id !== 'stepScan') { clearCurrent(); closeCamera(false); clearSession(); }
       updateSummary();
       if (id === 'stepInitials') focusLater('initialsInput');
-      if (id === 'stepLogin') focusLater('passInput');
+      if (id === 'stepLogin') { pinValue = ''; renderPin(); }
       if (id === 'stepZone') { document.getElementById('zoneInput').value = ''; renderZones(); focusLater('zoneInput'); }
       // No auto-focus on the scan box: scans are captured anywhere on the
       // screen, and focusing would pop up the phone keyboard.
@@ -947,9 +984,50 @@
     }
     applyUserType(userType);
 
+    /* ---------- login PIN pad ----------
+     * Tap the keys, or type on a keyboard (Enter logs in, Backspace deletes).
+     */
+    let pinValue = '';
+    const PIN_MAX = 12;
+
+    function renderPin() {
+      const dots = document.getElementById('pinDots');
+      dots.innerHTML = pinValue
+        ? '<span></span>'.repeat(pinValue.length)
+        : '<span class="hint">Code</span>';
+      document.getElementById('loginGo').disabled = !pinValue;
+    }
+
+    function pinKey(k) {
+      if (checkingLogin) return; // wait while the code is being checked
+      if (k === 'clear') pinValue = '';
+      else if (k === 'back') pinValue = pinValue.slice(0, -1);
+      else if (pinValue.length < PIN_MAX) pinValue += k;
+      setStatus('');
+      renderPin();
+    }
+
+    const pinPadEl = document.getElementById('pinPad');
+    pinPadEl.addEventListener('mousedown', e => e.preventDefault());
+    pinPadEl.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (b) pinKey(b.dataset.k);
+    });
+    document.addEventListener('keydown', e => {
+      if (!isStepActive('stepLogin') || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === 'Enter') { e.preventDefault(); if (pinValue) submitLogin(); return; }
+      if (e.key === 'Backspace') { e.preventDefault(); pinKey('back'); return; }
+      if (e.key === 'Escape') { pinKey('clear'); return; }
+      if (e.key.length === 1 && /\S/.test(e.key)) { e.preventDefault(); pinKey(e.key); }
+    });
+
+    let checkingLogin = false;
+
     function submitLogin() {
-      const val = document.getElementById('passInput').value.trim();
-      if (!val) { setStatus('Enter the password.', true); return; }
+      if (checkingLogin) return;
+      const val = pinValue.trim();
+      if (!val) { setStatus('Enter your code.', true); return; }
+      checkingLogin = true;
       const btn = document.getElementById('loginGo');
       btn.disabled = true;
       setStatus('Checking…');
@@ -958,9 +1036,12 @@
       callServer('login')
         .then(res => {
           applyUserType(res && res.type);
+          checkingLogin = false;
           btn.disabled = false;
+          setStatus('');
           try { localStorage.setItem('inv_pass', password); } catch (e) {}
-          document.getElementById('passInput').value = '';
+          pinValue = '';
+          renderPin();
           showStep('stepLocation');
           appData = null;
           loadAppData();
@@ -968,9 +1049,18 @@
           if (saveQueue.length) { retryDelay = 0; netError = ''; sendQueue(); }
         })
         .catch(err => {
-          btn.disabled = false;
+          checkingLogin = false;
           password = '';
-          setStatus(isLoginError(err) ? 'Wrong password.' : err.message, true);
+          if (isLoginError(err)) {
+            setStatus('Wrong code. Try again.', true);
+            playWarning();
+            pinValue = '';
+            const dots = document.getElementById('pinDots');
+            dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake');
+          } else {
+            setStatus(err.message, true);
+          }
+          renderPin();
         });
     }
 
