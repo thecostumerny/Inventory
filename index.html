@@ -1138,6 +1138,20 @@
       return c;
     }
 
+    /*
+     * Splits a barcode cell into its barcodes. Handles cells like
+     *   "057543841072; 57543841072"   "GTIN: 0123…, UPC:0456…"
+     * Separators: ; , | or spaces. Labels such as "GTIN:" or "UPC:" in front
+     * of a barcode are ignored.
+     */
+    function splitBarcodes(cell) {
+      return String(cell)
+        .replace(/[A-Za-z][A-Za-z ]*:/g, ' ')   // drop labels like GTIN: / UPC:
+        .split(/[;,|\s]+/)
+        .map(c => c.trim())
+        .filter(Boolean);
+    }
+
     function loadItems(loc) {
       if (items.location === loc && (items.index || items.loading)) return;
       items.location = loc;
@@ -1151,11 +1165,11 @@
           if (items.location !== loc) return; // location changed meanwhile
           const d = typeof json === 'string' ? JSON.parse(json) : json;
           const index = new Map();
-          // A barcode cell may hold several barcodes separated by commas;
-          // every one of them points to the same item
+          // A barcode cell may hold several barcodes; every one of them
+          // points to the same item
           d.codes.forEach((cell, i) => {
             if (!cell) return;
-            cell.split(',').forEach(code => {
+            splitBarcodes(cell).forEach(code => {
               const key = normCode(code);
               if (!key) return;
               if (!index.has(key)) index.set(key, []);
