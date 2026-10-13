@@ -1,1816 +1,416 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Inventory</title>
-  <base target="_top">
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --card: #ffffff;
-      --text: #1f2933;
-      --muted: #616e7c;
-      --border: #cbd2d9;
-      --fc: #1565c0;
-      --mh: #2e7d32;
-      --ba: #6a1b9a;
-      --accent: #1565c0;
-      --ok: #2e7d32;
-      --ok-bg: #e8f5e9;
-      --warn: #b26a00;
-      --error: #c62828;
-      --error-bg: #ffebee;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Arial, Helvetica, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-    }
-    .wrap {
-      max-width: 520px;
-      margin: 0 auto;
-      padding: 24px 16px 40px;
-    }
-    h1 { margin: 0 0 4px; font-size: 1.6rem; text-align: center; }
+/**
+ * Web App entry point and server functions for the Inventory app.
+ * Lives in the same Apps Script project as Code.gs.
+ */
 
-    /* Summary bar showing choices so far */
-    #summary {
-      display: none;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 12px 0 4px;
-    }
-    .chip {
-      padding: 6px 12px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      font-size: 0.9rem;
-    }
-    .chip b { margin-left: 4px; }
+const LOCATIONS = ['FC', 'MH', 'BA'];
+const ZONES_SHEET = 'Zones';
 
-    .step { display: none; margin-top: 20px; }
-    .step.active { display: block; }
-    .step h2 { margin: 0 0 16px; font-size: 1.2rem; text-align: center; color: var(--muted); font-weight: normal; }
+// Which columns of the Zones sheet hold each location's zones (1-based).
+// A location with several columns gets all of them in one list.
+// A location not listed here skips the zone step.
+const ZONE_COLUMNS = {
+  FC: [1],    // A
+  BA: [5, 6]  // E and F
+};
 
-    /* Location buttons */
-    .loc-buttons { display: flex; gap: 12px; }
-    .loc-btn {
-      flex: 1;
-      padding: 36px 0;
-      font-size: 2rem;
-      font-weight: bold;
-      color: #fff;
-      border: none;
-      border-radius: 14px;
-      cursor: pointer;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-    }
-    .loc-btn:active { transform: scale(0.97); }
-    .loc-btn:disabled { opacity: 0.5; cursor: wait; }
-    #btnFC { background: var(--fc); }
-    #btnMH { background: var(--mh); }
-    #btnBA { background: var(--ba); }
+// Each save is also logged to "<location> Scans", e.g. "FC Scans".
+const SCAN_LOG_HEADERS = ['SKU', 'Description', 'Counted', 'Zone', 'Counted By'];
 
-    /* Inputs */
-    .input-row { display: flex; gap: 10px; }
-    input[type=text] {
-      flex: 1;
-      min-width: 0;
-      padding: 14px;
-      font-size: 1.3rem;
-      border: 2px solid var(--border);
-      border-radius: 10px;
-      text-transform: uppercase;
-    }
-    input[type=text]:focus { outline: none; border-color: var(--accent); }
-    .go-btn {
-      padding: 0 22px;
-      font-size: 1.1rem;
-      font-weight: bold;
-      color: #fff;
-      background: var(--accent);
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-    }
-    .go-btn:disabled { opacity: 0.4; cursor: default; }
+// Columns on FC / MH / BA (0-based: A = 0), as built by Code.gs
+const TITLE_IDX = 0;       // A
+const VARIANT_IDXS = [1, 2, 3]; // B, C, D
+const SKU_IDX = 4;         // E
+const BARCODE_IDX = 5;     // F (one or more barcodes, comma separated)
+const PRICE_IDX = 6;       // G
+const EXPECTED_IDX = 8;    // I
+const COUNT_COL = 10;      // J (1-based, for writing)
+const READ_COLS = 10;      // read A–J
 
-    /* Zone quick-select grid */
-    #zoneGrid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-      gap: 10px;
-      margin-top: 16px;
-    }
-    .zone-btn {
-      padding: 16px 6px;
-      font-size: 1.1rem;
-      font-weight: bold;
-      background: var(--card);
-      color: var(--text);
-      border: 2px solid var(--border);
-      border-radius: 10px;
-      cursor: pointer;
-      word-break: break-word;
-    }
-    .zone-btn:active { background: #e3eefb; border-color: var(--accent); }
-    #zoneEmpty { display: none; margin-top: 16px; text-align: center; color: var(--muted); }
+/** Serves the app page when the Web App URL is opened. */
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('Inventory')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
 
-    /* Scan */
-    #itemsStatus { margin-top: 6px; text-align: center; color: var(--muted); font-size: 0.95rem; }
-    #itemsStatus:empty { display: none; }
-    /* Just enough room for one line of save alerts */
-    #saveStatus { margin-top: 6px; text-align: center; font-weight: bold; font-size: 0.95rem; line-height: 1.3; min-height: 1.3em; }
-    #saveStatus.ok { color: var(--ok); }
-    #saveStatus.warn { color: var(--warn); }
-    #saveStatus.error { color: var(--error); }
-    #saveStatus.pending { color: var(--muted); font-weight: normal; }
-    #scanResult { margin-top: 4px; }
-    .result {
-      padding: 16px;
-      border-radius: 12px;
-      border: 2px solid var(--border);
-      background: var(--card);
-    }
-    .result.found { background: var(--ok-bg); border-color: var(--ok); }
-    .result.notfound { background: var(--error-bg); border-color: var(--error); }
-    .result h3 { margin: 0 0 10px; font-size: 1.2rem; }
-    .result.found h3 { color: var(--ok); }
-    .result.notfound h3 { color: var(--error); }
-    .result table { width: 100%; border-collapse: collapse; }
-    .result td { padding: 4px 0; vertical-align: top; }
-    /* Compact found box */
-    .result.found { padding: 8px 12px; border-width: 1px; border-radius: 10px; }
-    .result.found h3 { display: none; }
-    .result.found td { padding: 1px 0; font-size: 0.95rem; }
-    .result.found { text-align: center; }
-    .item-line {
-      display: flex;
-      justify-content: center;
-      align-items: baseline;
-      gap: 16px;
-      font-size: 1rem;
-      line-height: 1.4;
-    }
-    .item-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .item-line .nowrap { white-space: nowrap; }
-    .item-line:not(.counts) { gap: 0.3em; } /* SKU Description Price: a single space apart */
-    .item-line.counts { margin-top: 4px; gap: 24px; color: var(--muted); }
-    .item-line.counts b { color: var(--text); margin-left: 4px; }
-    .result td:first-child { color: var(--muted); padding-right: 12px; white-space: nowrap; }
-    .result td:last-child { font-weight: bold; word-break: break-word; }
-    .result .note { margin-top: 8px; font-size: 0.9rem; color: var(--muted); }
-    .sku-fix { display: flex; gap: 8px; margin-top: 10px; }
-    .sku-fix-input {
-      flex: 1; min-width: 0;
-      padding: 10px 12px; font-size: 1.15rem;
-      border: 2px solid var(--border); border-radius: 8px;
-      text-transform: uppercase;
-    }
-    .sku-fix-input:focus { outline: none; border-color: var(--accent); }
-    .sku-fix-go, .sku-fix-skip {
-      padding: 10px 18px; font-size: 1.05rem; font-weight: bold;
-      border-radius: 8px; cursor: pointer;
-    }
-    .sku-fix-go { background: var(--accent); color: #fff; border: none; }
-    .sku-fix-skip {
-      display: block; width: 100%; margin-top: 10px;
-      background: transparent; color: var(--text); border: 1px solid var(--muted);
-    }
-    .sku-fix-msg { min-height: 1.2em; margin-top: 6px; font-size: 0.95rem; font-weight: bold; color: var(--error); }
+/**
+ * Data requests from the app when it runs outside Apps Script (e.g. GitHub Pages).
+ * Body: {action, args, pass}. Only these actions can be called, and each one
+ * checks the password itself.
+ */
+const API_ACTIONS = {
+  ping:       function () { return JSON.stringify(ping()); },
+  login:      function (args, pass) { return JSON.stringify(login(pass)); },
+  getAppData: function (args, pass) { return JSON.stringify(getAppData(pass)); },
+  getItems:   function (args, pass) { return getItems(args[0], pass); }, // already JSON
+  saveCounts: function (args, pass) { return JSON.stringify(saveCounts(args[0] || [], pass)); }
+};
 
-    /* Quantity entry */
-    .qty-panel {
-      margin-top: 12px;
-      padding: 16px;
-      background: var(--card);
-      border-radius: 12px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }
-    .qty-label { text-align: center; color: var(--muted); margin-bottom: 8px; }
-    .qty-row { display: flex; gap: 10px; align-items: stretch; }
-    .qty-row .qty-display { flex: 1; min-width: 0; }
-    .qty-row .save-btn { flex: 0 0 auto; padding: 0 28px; font-size: 1.3rem; font-weight: bold; border-radius: 10px; cursor: pointer; }
-    .qty-display {
-      text-align: center;
-      font-size: 2.6rem;
-      font-weight: bold;
-      padding: 10px;
-      border: 2px solid var(--accent);
-      border-radius: 10px;
-      min-height: 1.6em;
-      letter-spacing: 2px;
-    }
-    .qty-display.empty { color: var(--border); }
-    .qty-display.default { background: #e3eefb; } /* default 1: typing replaces it */
-    .numpad {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .numpad button {
-      padding: 18px 0;
-      font-size: 1.6rem;
-      font-weight: bold;
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      cursor: pointer;
-      user-select: none;
-    }
-    .numpad button:active { background: #e3eefb; }
-    .numpad button.fn { font-size: 1.1rem; color: var(--muted); }
-    .qty-actions { display: flex; gap: 10px; margin-top: 12px; }
-    .qty-actions button {
-      padding: 16px 0;
-      font-size: 1.2rem;
-      font-weight: bold;
-      border-radius: 10px;
-      cursor: pointer;
-    }
-    .skip-btn { flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--text); }
-    .save-btn { flex: 2; background: var(--ok); border: none; color: #fff; }
-    .save-btn:disabled { opacity: 0.4; cursor: default; }
-    .key-hint { margin-top: 10px; text-align: center; font-size: 0.85rem; color: var(--muted); }
+function doPost(e) {
+  let out;
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const fn = API_ACTIONS[body.action];
+    if (!fn) throw new Error('Unknown action');
+    out = '{"ok":true,"data":' + fn(body.args || [], body.pass) + '}';
+  } catch (err) {
+    out = JSON.stringify({ ok: false, error: err.message });
+  }
+  return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
+}
 
-    .back-btn {
-      display: block;
-      margin: 20px auto 0;
-      padding: 10px 18px;
-      font-size: 1rem;
-      background: transparent;
-      border: 1px solid var(--muted);
-      border-radius: 8px;
-      color: var(--text);
-      cursor: pointer;
-    }
+/* ---------- password ----------
+ * Any value in column A of the "Login" sheet is a valid password.
+ * The list is cached for 60 seconds so checks stay fast;
+ * changes on the sheet take effect within a minute.
+ */
+const LOGIN_SHEET = 'Login';
 
-    /* Background save status, pinned to the top of the screen */
-    #syncBar {
-      display: none;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      margin: -24px -16px 12px;
-      padding: 10px 16px;
-      font-size: 0.95rem;
-      text-align: center;
-    }
-    #syncBar.pending { display: block; background: #eef2f6; color: var(--muted); }
-    #syncBar.error { display: block; background: var(--error); color: #fff; text-align: left; }
-    #syncBar ul { margin: 6px 0 8px; padding-left: 20px; }
-    #syncBar li { margin: 2px 0; }
-    #syncBar button {
-      padding: 6px 14px;
-      font-size: 0.95rem;
-      font-weight: bold;
-      background: #fff;
-      color: var(--error);
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      margin-right: 8px;
-    }
+/** Quick password check for the login screen. */
+function login(pass) {
+  checkLogin_(pass);
+  return true;
+}
 
-    #status { margin-top: 18px; min-height: 1.4em; text-align: center; }
-    input[type=password] {
-      flex: 1;
-      min-width: 0;
-      padding: 14px;
-      font-size: 1.3rem;
-      border: 2px solid var(--border);
-      border-radius: 10px;
-    }
-    input[type=password]:focus { outline: none; border-color: var(--accent); }
-    .logout-btn {
-      display: block;
-      margin: 28px auto 0;
-      padding: 6px 12px;
-      font-size: 0.9rem;
-      background: transparent;
-      border: none;
-      color: var(--muted);
-      text-decoration: underline;
-      cursor: pointer;
-    }
+/**
+ * Called when the login screen opens, before anyone types. It wakes the
+ * script up and loads the password list into the cache, so the real check
+ * is fast. Returns nothing about the passwords.
+ */
+function ping() {
+  try { getPasswords_(); } catch (e) {}
+  return true;
+}
 
-    /* Phone camera scanning */
-    /* Barcode box with the camera icon inside it, at the right edge */
-    .scan-field { position: relative; flex: 1; min-width: 0; display: flex; }
-    .scan-field input { width: 100%; }
-    body.touch .scan-field input { padding-right: 54px; }
-    .cam-btn {
-      display: none; /* shown on touch devices */
-      position: absolute;
-      top: 50%;
-      right: 6px;
-      transform: translateY(-50%);
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      background: transparent;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      align-items: center;
-      justify-content: center;
-    }
-    .cam-btn:active { background: #e3eefb; }
-    .cam-btn svg { width: 28px; height: 28px; fill: var(--accent); display: block; }
-    body.touch .cam-btn { display: flex; }
-    #camOverlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      background: #111;
-      padding: 16px;
-      overflow-y: auto;
-    }
-    #camOverlay.open { display: block; }
-    .cam-box { max-width: 520px; margin: 0 auto; }
-    #camView {
-      position: relative;
-      width: 100%;
-      aspect-ratio: 3 / 4;
-      max-height: 65vh;
-      border-radius: 12px;
-      overflow: hidden;
-      background: #000;
-    }
-    #camVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
-    /* Aim box: barcodes are read from this middle band */
-    .cam-guide {
-      position: absolute;
-      left: 5%; right: 5%; top: 30%; bottom: 30%;
-      border: 3px solid rgba(255, 255, 255, 0.9);
-      border-radius: 10px;
-      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
-      pointer-events: none;
-    }
-    #camMsg { margin: 14px 0; min-height: 1.3em; text-align: center; color: #fff; font-size: 1.05rem; }
-    #camMsg.ok { color: #a5d6a7; font-weight: bold; }
+function checkLogin_(pass) {
+  pass = String(pass == null ? '' : pass).trim();
+  if (!pass || getPasswords_().indexOf(pass) === -1) {
+    throw new Error('LOGIN_REQUIRED');
+  }
+}
 
-    /* Quantity pop-up over the camera: the item and number pad move in here,
-       then back to the camera for the next scan */
-    #camSheet { display: none; }
-    #camOverlay.sheet #camView,
-    #camOverlay.sheet #camMsg { display: none; }
-    #camOverlay.sheet #camSheet { display: block; }
-    #camSheet #scanResult { margin-top: 0; }
-    #camSheet .qty-panel { margin-top: 10px; }
-    #camOverlay.sheet .cam-actions { margin-top: 10px; }
-    .cam-actions { display: flex; gap: 10px; }
-    .cam-actions > * {
-      flex: 1;
-      padding: 16px 0;
-      font-size: 1.15rem;
-      font-weight: bold;
-      text-align: center;
-      border-radius: 10px;
-      cursor: pointer;
-    }
-    #camClose { background: transparent; color: #fff; border: 1px solid #fff; }
-    #status.error { color: var(--error); }
+function getPasswords_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('login_list');
+  if (hit) return JSON.parse(hit);
 
-    /* ---------- responsive sizing ----------
-     * Sizes scale smoothly with the screen; the rules below adjust for
-     * small phones, short (landscape) screens and tablets/computers.
-     */
-    html { -webkit-text-size-adjust: 100%; }
-    input::placeholder { text-transform: none; }
-    .wrap {
-      max-width: 560px;
-      padding: clamp(12px, 3vh, 24px) max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
-    }
-    h1 { font-size: clamp(1.3rem, 5vw, 1.7rem); }
-    .loc-btn { padding: clamp(22px, 7vh, 40px) 0; font-size: clamp(1.4rem, 7vw, 2.2rem); }
-    .numpad button { padding: clamp(10px, 2.6vh, 20px) 0; font-size: clamp(1.3rem, 5vw, 1.7rem); }
-    .qty-display { font-size: clamp(1.8rem, 9vw, 2.6rem); padding: clamp(4px, 1.2vh, 10px); }
-    .qty-actions button { padding: clamp(10px, 2.2vh, 16px) 0; }
-    #syncBar { margin: calc(-1 * clamp(12px, 3vh, 24px)) -16px 12px; }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheets().filter(function (sh) {
+    return sh.getName().toLowerCase() === LOGIN_SHEET.toLowerCase();
+  })[0];
+  if (!sheet) throw new Error('Login is not set up yet.');
 
-    /* Small phones */
-    @media (max-width: 360px) {
-      .loc-buttons { gap: 8px; }
-      .go-btn { padding: 0 14px; }
-      .qty-row .save-btn { padding: 0 18px; }
-      .numpad { gap: 7px; }
-      .item-line { font-size: 0.9rem; }
-    }
+  const lastRow = sheet.getLastRow();
+  const list = lastRow < 1 ? [] : sheet.getRange(1, 1, lastRow, 1).getDisplayValues()
+    .map(function (r) { return String(r[0]).trim(); })
+    .filter(String);
+  if (!list.length) throw new Error('Login is not set up yet.');
 
-    /* Short screens (phone turned sideways): keep the number pad on screen */
-    @media (max-height: 520px) {
-      h1 { display: none; }
-      .step { margin-top: 8px; }
-      .step h2 { margin-bottom: 8px; font-size: 1rem; }
-      .numpad { gap: 6px; margin-top: 8px; }
-      .qty-panel { padding: 10px; margin-top: 8px; }
-      .key-hint { display: none; }
-      #camView { aspect-ratio: auto; height: 60vh; }
-    }
+  cache.put('login_list', JSON.stringify(list), 60);
+  return list;
+}
 
-    /* Tablets and computers: more room, side-by-side scan layout */
-    @media (min-width: 820px) {
-      .wrap { max-width: 900px; }
-      #stepLocation, #stepInitials, #stepLogin, #stepZone { max-width: 560px; margin-left: auto; margin-right: auto; }
-      #stepScan.active {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        grid-template-areas:
-          "title  title"
-          "bar    bar"
-          "info   qty"
-          "back   back";
-        column-gap: 24px;
-        align-items: start;
-      }
-      #stepScan > h2 { grid-area: title; }
-      #stepScan > .input-row { grid-area: bar; max-width: 560px; width: 100%; justify-self: center; }
-      #stepScan > .scan-info { grid-area: info; }
-      #stepScan > #qtyPanel { grid-area: qty; margin-top: 12px; }
-      #stepScan > .back-btn { grid-area: back; }
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div id="syncBar"></div>
-    <h1>Inventory</h1>
+/**
+ * Called once in the background as soon as the page opens.
+ * Returns everything the first screens need for every location,
+ * so picking a location and zone is instant.
+ * @return {Object<string, {location?: string, itemCount?: number,
+ *                           zones?: string[]|null, error?: string}>}
+ */
+function getAppData(pass) {
+  checkLogin_(pass);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const data = {};
 
-    <div id="summary">
-      <span class="chip" id="chipLoc">Location<b></b></span>
-      <span class="chip" id="chipInit">Initials<b></b></span>
-      <span class="chip" id="chipZone">Zone<b></b></span>
-    </div>
-
-    <!-- Step 0: Login -->
-    <div class="step" id="stepLogin">
-      <h2>Enter the password</h2>
-      <div class="input-row">
-        <input type="password" id="passInput" autocomplete="current-password"
-               placeholder="Password" onkeydown="if(event.key==='Enter') submitLogin()">
-        <button class="go-btn" id="loginGo" onclick="submitLogin()">Log in</button>
-      </div>
-    </div>
-
-    <!-- Step 1: Location -->
-    <div class="step" id="stepLocation">
-      <h2>Choose a location</h2>
-      <div class="loc-buttons">
-        <button class="loc-btn" id="btnFC" onclick="pickLocation('FC')">FC</button>
-        <button class="loc-btn" id="btnMH" onclick="pickLocation('MH')">MH</button>
-        <button class="loc-btn" id="btnBA" onclick="pickLocation('BA')">BA</button>
-      </div>
-      <button class="logout-btn" onclick="logOut()">Log out</button>
-    </div>
-
-    <!-- Step 2: Initials -->
-    <div class="step" id="stepInitials">
-      <h2>Enter your initials</h2>
-      <div class="input-row">
-        <input type="text" id="initialsInput" maxlength="11" autocomplete="off"
-               placeholder="e.g. JD or JD/MK" oninput="onInitialsInput()"
-               onkeydown="if(event.key==='Enter') submitInitials()">
-        <button class="go-btn" id="initialsGo" onclick="submitInitials()" disabled>Next</button>
-      </div>
-      <button class="back-btn" onclick="showStep('stepLocation')">Back</button>
-    </div>
-
-    <!-- Step 3: Zone -->
-    <div class="step" id="stepZone">
-      <h2>Choose a zone</h2>
-      <div class="input-row">
-        <input type="text" id="zoneInput" autocomplete="off"
-               placeholder="Zone" oninput="renderZones()"
-               onkeydown="if(event.key==='Enter') submitTypedZone()">
-        <button class="go-btn" onclick="submitTypedZone()">Go</button>
-      </div>
-      <div id="zoneGrid"></div>
-      <div id="zoneEmpty">No matching zones</div>
-      <button class="back-btn" onclick="showStep('stepInitials')">Back</button>
-    </div>
-
-    <!-- Step 4: Scan + count -->
-    <div class="step" id="stepScan">
-      <h2>Scan a barcode or type a SKU</h2>
-      <div class="input-row">
-        <div class="scan-field">
-          <input type="text" id="scanInput" autocomplete="off" autocorrect="off"
-                 autocapitalize="off" spellcheck="false" placeholder="SKU"
-                 onkeydown="if(event.key==='Enter'){event.preventDefault();submitScan();}">
-          <button class="cam-btn" id="camBtn" onclick="openCamera()" aria-label="Scan with camera" title="Scan with camera">
-            <svg viewBox="0 0 24 24"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-          </button>
-        </div>
-        <button class="go-btn" onclick="submitScan()">Enter</button>
-      </div>
-      <div class="scan-info">
-        <div id="itemsStatus"></div>
-        <div id="saveStatus"></div>
-        <div id="scanResult"></div>
-      </div>
-
-      <div class="qty-panel" id="qtyPanel" style="display:none;">
-        <div class="qty-label">Quantity counted</div>
-        <div class="qty-row">
-          <div class="qty-display empty" id="qtyDisplay">0</div>
-          <button tabindex="-1" class="save-btn" id="saveBtn" disabled>Save</button>
-        </div>
-        <div class="numpad" id="numpad">
-          <button tabindex="-1" data-k="1">1</button>
-          <button tabindex="-1" data-k="2">2</button>
-          <button tabindex="-1" data-k="3">3</button>
-          <button tabindex="-1" data-k="4">4</button>
-          <button tabindex="-1" data-k="5">5</button>
-          <button tabindex="-1" data-k="6">6</button>
-          <button tabindex="-1" data-k="7">7</button>
-          <button tabindex="-1" data-k="8">8</button>
-          <button tabindex="-1" data-k="9">9</button>
-          <button tabindex="-1" data-k="clear" class="fn">Clear</button>
-          <button tabindex="-1" data-k="0">0</button>
-          <button tabindex="-1" data-k="back" class="fn">&#9003;</button>
-        </div>
-        <div class="qty-actions">
-          <button tabindex="-1" class="skip-btn" id="skipBtn">Skip</button>
-        </div>
-        <div class="key-hint">Enter saves 1, or type a different number first · Esc to skip</div>
-      </div>
-
-      <button class="back-btn" onclick="backFromScan()">Back</button>
-    </div>
-
-    <div id="status"></div>
-  </div>
-
-  <!-- Camera scanner (phones / tablets) -->
-  <div id="camOverlay">
-    <div class="cam-box">
-      <div id="camView">
-        <video id="camVideo" playsinline muted autoplay></video>
-        <div class="cam-guide"></div>
-      </div>
-      <div id="camMsg"></div>
-      <div id="camSheet"></div>
-      <div class="cam-actions">
-        <button id="camClose">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const state = {
-      location: null,
-      itemCount: 0,
-      zones: null,   // null = this location has no zone step
-      initials: '',
-      zone: null
-    };
-
-    /* ---------- helpers ---------- */
-
-    function showStep(id) {
-      document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-      document.getElementById(id).classList.add('active');
-      setStatus('');
-      // Clear choices made at or after this step
-      if (id === 'stepLocation') { state.location = null; state.zone = null; setLocButtonsDisabled(false); }
-      if (id === 'stepInitials' || id === 'stepZone') { state.zone = null; }
-      if (id !== 'stepScan') { clearCurrent(); closeCamera(false); }
-      updateSummary();
-      if (id === 'stepInitials') focusLater('initialsInput');
-      if (id === 'stepLogin') focusLater('passInput');
-      if (id === 'stepZone') { document.getElementById('zoneInput').value = ''; renderZones(); focusLater('zoneInput'); }
-      // No auto-focus on the scan box: scans are captured anywhere on the
-      // screen, and focusing would pop up the phone keyboard.
-      if (id === 'stepScan') { updateItemsStatus(); }
-    }
-
-    function focusLater(id) {
-      setTimeout(() => document.getElementById(id).focus(), 50);
-    }
-
-    function setStatus(msg, isError) {
-      const el = document.getElementById('status');
-      el.textContent = msg || '';
-      el.className = isError ? 'error' : '';
-    }
-
-    function setLocButtonsDisabled(d) {
-      document.getElementById('btnFC').disabled = d;
-      document.getElementById('btnMH').disabled = d;
-      document.getElementById('btnBA').disabled = d;
-    }
-
-    function updateSummary() {
-      const set = (id, val) => {
-        const chip = document.getElementById(id);
-        chip.style.display = val ? 'inline-block' : 'none';
-        chip.querySelector('b').textContent = val || '';
+  LOCATIONS.forEach(function (loc) {
+    const sheet = ss.getSheetByName(loc);
+    if (!sheet) {
+      data[loc] = {
+        error: loc + ' is not ready for counting yet.'
       };
-      set('chipLoc', state.location);
-      set('chipInit', state.location && state.initials && !isStepActive('stepInitials') ? state.initials : '');
-      set('chipZone', state.zone);
-      document.getElementById('summary').style.display = state.location ? 'flex' : 'none';
+      return;
     }
-
-    function isStepActive(id) {
-      return document.getElementById(id).classList.contains('active');
-    }
-
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, c =>
-        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    }
-
-    /* ---------- sounds ---------- */
-
-    let audioCtx = null;
-
-    // Browsers only allow sound after the user has tapped or typed,
-    // so the audio is unlocked on the first interaction.
-    function ensureAudio() {
-      if (!audioCtx) {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (AC) audioCtx = new AC();
-      }
-      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-    }
-    document.addEventListener('pointerdown', ensureAudio);
-    document.addEventListener('keydown', ensureAudio);
-
-    function tone(type, freqStart, freqEnd, start, duration, volume) {
-      const t = audioCtx.currentTime + start;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = type;
-      osc.frequency.setValueAtTime(freqStart, t);
-      if (freqEnd !== freqStart) osc.frequency.exponentialRampToValueAtTime(freqEnd, t + duration);
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(volume, t + 0.005);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(t);
-      osc.stop(t + duration + 0.02);
-    }
-
-    // Found: short, bright "pop"
-    function playPop() {
-      ensureAudio();
-      if (!audioCtx) return;
-      tone('sine', 1000, 350, 0, 0.09, 0.7);
-    }
-
-    // Not found / error: two low warning beeps
-    function playWarning() {
-      ensureAudio();
-      if (!audioCtx) return;
-      tone('square', 160, 160, 0, 0.22, 0.35);
-      tone('square', 160, 160, 0.3, 0.22, 0.35);
-    }
-
-    /* ---------- background preload ---------- */
-
-    /* ---------- talking to the sheet ----------
-     * Inside Apps Script the app uses google.script.run. When this same page
-     * is opened on its own (outside Google's frame, so the live camera works)
-     * it calls the Apps Script web app at API_URL instead.
-     * Every call carries the password, which the sheet checks.
-     */
-    const API_URL = 'https://script.google.com/macros/s/AKfycbyxtI6PT40vcf1em5DV6QGqmRVSsMDiqRm9WCz0bpki3l7FHyvPtJMxWiOX92L2Jm5t/exec';
-    const inAppsScript = !!(window.google && google.script && google.script.run);
-
-    let password = '';
-    try { password = localStorage.getItem('inv_pass') || ''; } catch (e) {}
-
-    function isLoginError(err) {
-      return /LOGIN_REQUIRED/.test(err && err.message || '');
-    }
-
-    function callServer(fn, ...args) {
-      return new Promise((resolve, reject) => {
-        if (inAppsScript) {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)[fn](...args, password);
-          return;
-        }
-        fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight
-          body: JSON.stringify({ action: fn, args: args, pass: password })
-        })
-          .then(r => r.json())
-          .then(j => { if (!j.ok) throw new Error(j.error || 'Server error'); resolve(j.data); })
-          .catch(err => {
-            const msg = err && err.message && !/fetch|network|load failed|json/i.test(err.message)
-              ? err.message : 'Connection problem';
-            reject(new Error(msg));
-          });
-      });
-    }
-
-    // Same style as google.script.run: runServer().withSuccessHandler(..).getItems(loc)
-    function runServer() {
-      let onOk = () => {}, onFail = () => {};
-      const go = (fn, ...a) => callServer(fn, ...a).then(
-        d => onOk(d),
-        err => { if (isLoginError(err)) loginExpired(); onFail(err); }
-      );
-      return {
-        withSuccessHandler(f) { onOk = f; return this; },
-        withFailureHandler(f) { onFail = f; return this; },
-        getAppData() { go('getAppData'); },
-        getItems(loc) { go('getItems', loc); },
-        saveCounts(entries) { go('saveCounts', entries); }
+    try {
+      data[loc] = {
+        location: loc,
+        itemCount: Math.max(sheet.getLastRow() - 1, 0), // minus header row
+        zones: getZones_(loc)
       };
+    } catch (e) {
+      data[loc] = { error: e.message };
     }
+  });
 
-    /* ---------- login ---------- */
+  return data;
+}
 
-    function submitLogin() {
-      const val = document.getElementById('passInput').value.trim();
-      if (!val) { setStatus('Enter the password.', true); return; }
-      const btn = document.getElementById('loginGo');
-      btn.disabled = true;
-      setStatus('Checking…');
-      password = val;
-      // Quick check only; everything else loads afterwards in the background
-      callServer('login')
-        .then(() => {
-          btn.disabled = false;
-          try { localStorage.setItem('inv_pass', password); } catch (e) {}
-          document.getElementById('passInput').value = '';
-          showStep('stepLocation');
-          appData = null;
-          loadAppData();
-          startHeadStart();
-          if (saveQueue.length) { retryDelay = 0; netError = ''; sendQueue(); }
-        })
-        .catch(err => {
-          btn.disabled = false;
-          password = '';
-          setStatus(isLoginError(err) ? 'Wrong password.' : err.message, true);
-        });
-    }
+/**
+ * Loads the item list for a location so scans can be looked up on the device.
+ *
+ * Each row sends only what the app shows: SKU, name (Title + variants),
+ * Price and Expected, plus the barcode list and current Count.
+ * Built for speed with ~15,000 rows: one read of A:J, returned as JSON.
+ *
+ * @param {string} location  'FC', 'MH' or 'BA'
+ * @return {string} JSON: {rows: [sku, name, price, expected][], codes, counts}
+ *                  codes[i] is the raw barcode cell (may be "a, b, c")
+ */
+function getItems(location, pass) {
+  checkLogin_(pass);
+  if (LOCATIONS.indexOf(location) === -1) {
+    throw new Error('Unknown location: ' + location);
+  }
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(location);
+  if (!sheet) throw new Error(location + ' is not ready for counting yet.');
 
-    // The saved password stopped working (changed on the Login sheet)
-    function loginExpired() {
-      if (isStepActive('stepLogin')) return;
-      password = '';
-      try { localStorage.removeItem('inv_pass'); } catch (e) {}
-      appData = null;
-      showStep('stepLogin');
-      setStatus('Please log in again.', true);
-    }
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return JSON.stringify({ rows: [], codes: [], counts: [] });
 
-    function logOut() {
-      password = '';
-      try { localStorage.removeItem('inv_pass'); } catch (e) {}
-      appData = null;
-      items.location = null; items.index = null; items.rows = []; items.loading = false;
-      showStep('stepLogin');
-    }
+  const vals = sheet.getRange(2, 1, lastRow - 1, READ_COLS).getValues();
+  const rows = new Array(vals.length);
+  const codes = new Array(vals.length);
+  const counts = new Array(vals.length);
 
-    let appData = null;       // filled by getAppData()
-    let appDataFailed = false;
-    let pendingLoc = null;    // location tapped before data arrived
+  for (let r = 0; r < vals.length; r++) {
+    const v = vals[r];
+    codes[r] = String(v[BARCODE_IDX]).trim();
+    counts[r] = v[COUNT_COL - 1] === '' ? '' : String(v[COUNT_COL - 1]);
+    const price = v[PRICE_IDX];
+    rows[r] = [
+      String(v[SKU_IDX]),
+      itemName_(v),
+      typeof price === 'number' ? '$' + price.toFixed(2) : String(price),
+      String(v[EXPECTED_IDX])
+    ];
+  }
 
-    function loadAppData() {
-      appDataFailed = false;
-      runServer()
-        .withSuccessHandler(d => {
-          appData = d;
-          if (pendingLoc) { const l = pendingLoc; pendingLoc = null; pickLocation(l); }
-        })
-        .withFailureHandler(err => {
-          appDataFailed = true;
-          if (pendingLoc) {
-            pendingLoc = null;
-            setLocButtonsDisabled(false);
-            setStatus(err.message, true);
-          }
-        })
-        .getAppData();
-    }
+  return JSON.stringify({ rows: rows, codes: codes, counts: counts });
+}
 
-    // Item list for the chosen location, loaded while initials/zone are entered
-    const items = {
-      location: null,
-      loading: false,
-      error: null,
-      headers: [],
-      rows: [],
-      counts: [],
-      index: null      // normalized barcode -> array of row indexes
-    };
-    let pendingScan = null; // barcode scanned before items finished loading
+/** Title followed by any variants, skipping blanks and "Default Title". */
+function itemName_(v) {
+  const parts = [String(v[TITLE_IDX]).trim()];
+  VARIANT_IDXS.forEach(function (i) {
+    const x = String(v[i]).trim();
+    if (x && x.toLowerCase() !== 'default title') parts.push(x);
+  });
+  return parts.filter(String).join(' ');
+}
 
-    // Barcodes compare case-insensitively; numeric codes ignore leading zeros
-    function normCode(c) {
-      c = String(c).trim().toUpperCase();
-      if (/^\d+$/.test(c)) c = c.replace(/^0+(?=\d)/, '');
-      return c;
-    }
+/**
+ * Saves a batch of counts in ONE call (the app sends whatever has queued up
+ * while the previous save was running, so fast scanning stays fast).
+ *
+ * For each entry: adds qty to column J (Count) of the item's row and logs
+ * a row to "<location> Scans". Counts are added, not replaced.
+ * A lock keeps two devices saving at once from overwriting each other.
+ *
+ * Each entry gets its own result, so one bad entry doesn't block the rest.
+ *
+ * @param {Array<{loc: string, index: number, sku: string, code: string,
+ *                qty: number, zone: string, initials: string}>} entries
+ * @return {Array<{total: number}|{error: string}>}  one result per entry, same order
+ */
+function saveCounts(entries, pass) {
+  checkLogin_(pass);
+  const results = new Array(entries.length);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    function loadItems(loc) {
-      if (items.location === loc && (items.index || items.loading)) return;
-      items.location = loc;
-      items.loading = true;
-      items.error = null;
-      items.index = null;
-      updateItemsStatus();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    // Barcode links (found by SKU after a scan wasn't found) go to "Barcode Update"
+    const linkIdxs = [];
+    entries.forEach(function (e, i) { if (e.type === 'link') linkIdxs.push(i); });
+    if (linkIdxs.length) saveBarcodeLinks_(entries, linkIdxs, results);
 
-      runServer()
-        .withSuccessHandler(json => {
-          if (items.location !== loc) return; // location changed meanwhile
-          const d = typeof json === 'string' ? JSON.parse(json) : json;
-          const index = new Map();
-          // A barcode cell may hold several barcodes separated by commas;
-          // every one of them points to the same item
-          d.codes.forEach((cell, i) => {
-            if (!cell) return;
-            cell.split(',').forEach(code => {
-              const key = normCode(code);
-              if (!key) return;
-              if (!index.has(key)) index.set(key, []);
-              const list = index.get(key);
-              if (list[list.length - 1] !== i) list.push(i);
-            });
-          });
-          items.rows = d.rows;
-          items.codes = d.codes;
-          // SKU lookup, for typing a SKU instead of scanning
-          const skuIndex = new Map();
-          d.rows.forEach((r, i) => {
-            if (!r[0]) return;
-            const key = normCode(r[0]);
-            if (!skuIndex.has(key)) skuIndex.set(key, []);
-            skuIndex.get(key).push(i);
-          });
-          items.skuIndex = skuIndex;
-          items.counts = d.counts;
-          items.index = index;
-          items.loading = false;
-          updateItemsStatus();
-          if (pendingScan) { const c = pendingScan; pendingScan = null; lookup(c); }
-        })
-        .withFailureHandler(err => {
-          if (items.location !== loc) return;
-          items.loading = false;
-          items.error = err.message;
-          updateItemsStatus();
-          if (pendingScan) {
-            pendingScan = null;
-            showResultError('Could not load items: ' + err.message);
-          }
-        })
-        .getItems(loc);
-    }
-
-    function updateItemsStatus() {
-      const el = document.getElementById('itemsStatus');
-      if (items.loading) el.textContent = 'Loading items…';
-      else if (items.error) el.textContent = 'Could not load items. Go back and pick the location again.';
-      else el.textContent = '';
-    }
-
-    /* ---------- step 1: location ---------- */
-
-    function pickLocation(loc) {
-      // Data still on its way: wait for it, then continue automatically
-      if (!appData) {
-        if (appDataFailed) loadAppData(); // retry after an earlier failure
-        pendingLoc = loc;
-        setLocButtonsDisabled(true);
-        setStatus('Loading ' + loc + '…');
-        return;
-      }
-
-      const info = appData[loc];
-      if (!info || info.error) {
-        setLocButtonsDisabled(false);
-        setStatus(info ? info.error : 'Unknown location: ' + loc, true);
-        // Refresh in the background in case the sheet is created now
-        appData = null;
-        loadAppData();
-        return;
-      }
-
-      state.location = info.location;
-      state.itemCount = info.itemCount;
-      state.zones = info.zones;
-
-      // Start loading this location's barcodes now, in the background
-      // (often already loading, see the bottom of this script)
-      if (items.error) items.location = null; // allow a retry
-      loadItems(loc);
-      try { localStorage.setItem('inv_last_loc', loc); } catch (e) {}
-
-      // Pre-fill initials remembered on this device
-      let saved = '';
-      try { saved = localStorage.getItem('inv_initials') || ''; } catch (e) {}
-      document.getElementById('initialsInput').value = state.initials || saved;
-      onInitialsInput();
-      showStep('stepInitials');
-    }
-
-    /* ---------- step 2: initials ---------- */
-
-    // Letters and "/" allowed, e.g. JD or JD/MK
-    function cleanInitials(v) {
-      return v.toUpperCase()
-              .replace(/[^A-Z\/]/g, '')
-              .replace(/\/{2,}/g, '/');
-    }
-
-    function letterCount(v) {
-      return v.replace(/[^A-Z]/g, '').length;
-    }
-
-    function onInitialsInput() {
-      const el = document.getElementById('initialsInput');
-      el.value = cleanInitials(el.value);
-      document.getElementById('initialsGo').disabled = letterCount(el.value) < 2;
-    }
-
-    function submitInitials() {
-      const val = cleanInitials(document.getElementById('initialsInput').value)
-                    .replace(/^\/+|\/+$/g, ''); // no leading/trailing "/"
-      document.getElementById('initialsInput').value = val;
-      if (letterCount(val) < 2) { setStatus('Please enter at least 2 letters.', true); return; }
-      state.initials = val;
-      try { localStorage.setItem('inv_initials', val); } catch (e) {}
-
-      if (state.zones) {
-        showStep('stepZone');
-      } else {
-        goToScan();
-      }
-    }
-
-    /* ---------- step 3: zone ---------- */
-
-    function renderZones() {
-      const typed = document.getElementById('zoneInput').value.trim().toUpperCase();
-      const list = (state.zones || []).filter(z => z.toUpperCase().includes(typed));
-      document.getElementById('zoneGrid').innerHTML = list.map(z =>
-        '<button class="zone-btn" data-zone="' + escapeHtml(z) + '">' + escapeHtml(z) + '</button>'
-      ).join('');
-      document.getElementById('zoneEmpty').style.display = list.length ? 'none' : 'block';
-    }
-
-    // One click handler for all zone buttons
-    document.getElementById('zoneGrid').addEventListener('click', e => {
-      const btn = e.target.closest('.zone-btn');
-      if (btn) chooseZone(btn.dataset.zone);
+    // Group count entries by location
+    const byLoc = {};
+    entries.forEach(function (e, i) {
+      if (e.type === 'link') return;
+      (byLoc[e.loc] = byLoc[e.loc] || []).push(i);
     });
 
-    function submitTypedZone() {
-      const typed = document.getElementById('zoneInput').value.trim().toUpperCase();
-      if (!typed) { setStatus('Type a zone or tap one below.', true); return; }
-      const exact = (state.zones || []).find(z => z.toUpperCase() === typed);
-      if (exact) { chooseZone(exact); return; }
-
-      const matches = (state.zones || []).filter(z => z.toUpperCase().includes(typed));
-      if (matches.length === 1) { chooseZone(matches[0]); return; }
-      setStatus(matches.length ? 'More than one zone matches. Tap the one you want.'
-                               : '"' + typed + '" is not in the zone list.', true);
-    }
-
-    function chooseZone(zone) {
-      state.zone = zone;
-      goToScan();
-    }
-
-    /* ---------- step 4: scan ---------- */
-
-    // The found item waiting for a quantity: { index, code, qty: '' }
-    let current = null;
-
-    function goToScan() {
-      document.getElementById('scanInput').value = '';
-      document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus('');
-      showStep('stepScan');
-      updateSummary();
-    }
-
-    function backFromScan() {
-      showStep(state.zones ? 'stepZone' : 'stepInitials');
-    }
-
-    // Barcode typed into the bar and submitted with Enter or the button
-    function submitScan() {
-      const input = document.getElementById('scanInput');
-      const code = input.value.trim();
-      input.value = '';
-      input.blur(); // hand keystrokes back to the screen-wide capture
-      handleCode(code);
-    }
-
-    function handleCode(code) {
-      if (!code) return;
-      if (!items.index) {
-        if (items.error) {
-          showResultError('Could not load items: ' + items.error);
-          playWarning();
-          return;
-        }
-        // Still loading: look it up as soon as the list arrives
-        pendingScan = code;
-        clearCurrent();
-        document.getElementById('scanResult').innerHTML =
-          '<div class="result"><h3>Loading items…</h3>' +
-          '<div class="note">' + escapeHtml(code) + ' will be checked as soon as loading finishes.</div></div>';
-        return;
-      }
-      lookup(code);
-    }
-
-    function lookup(code) {
-      // Barcode first; if no barcode matches, try it as a SKU
-      const key = normCode(code);
-      const matches = items.index.get(key) || (items.skuIndex && items.skuIndex.get(key));
-      const box = document.getElementById('scanResult');
-
-      // A new scan while an item still needs a quantity skips that item
-      if (current) setSaveStatus('Previous item was not saved', 'warn');
-
-      if (!matches) {
-        playWarning();
-        clearCurrent();
-        showNotFound(code);
-        return;
-      }
-
-      playPop();
-      showItem(matches[0], code, matches.length);
-    }
-
-    // Found item: the green box plus the quantity pad
-    function showItem(idx, code, matchCount) {
-      const box = document.getElementById('scanResult');
-      const [sku, desc, price, expected] = items.rows[idx];
-      const counted = items.counts[idx] === '' || items.counts[idx] == null ? '0' : items.counts[idx];
-      const note = matchCount > 1
-        ? '<div class="note">This barcode matches ' + matchCount + ' items. The count goes on the first one.</div>'
-        : '';
-      box.innerHTML =
-        '<div class="result found">' +
-          '<div class="item-line">' +
-            '<span class="nowrap">' + escapeHtml(sku) + '</span>' +
-            '<span class="item-desc">' + escapeHtml(desc) + '</span>' +
-            '<span class="nowrap">' + escapeHtml(price) + '</span>' +
-          '</div>' +
-          '<div class="item-line counts">' +
-            '<span>Expected <b>' + escapeHtml(expected || '0') + '</b></span>' +
-            '<span>Counted So Far <b>' + escapeHtml(counted) + '</b></span>' +
-          '</div>' +
-          note +
-        '</div>';
-
-      // Quantity starts at 1; the first digit typed replaces it
-      current = { index: idx, code: code, sku: items.rows[idx][0], qty: '1', fresh: true };
-      document.getElementById('qtyPanel').style.display = 'block';
-      renderQty();
-    }
-
-    /*
-     * Barcode not found: set the item aside, or look it up by SKU.
-     * A SKU match counts the item as usual and records the SKU and the
-     * scanned barcode on the "Barcode Update" sheet.
-     */
-    function showNotFound(code) {
-      const box = document.getElementById('scanResult');
-      box.innerHTML =
-        '<div class="result notfound">' +
-          '<h3>Barcode Not Found</h3>' +
-          '<div class="sku-fix-prompt">Enter the SKU to find the item:</div>' +
-          '<div class="sku-fix">' +
-            '<input type="text" class="sku-fix-input" inputmode="numeric" autocomplete="off" placeholder="SKU">' +
-            '<button class="sku-fix-go">Find</button>' +
-          '</div>' +
-          '<div class="sku-fix-msg"></div>' +
-          '<button class="sku-fix-skip">Skip</button>' +
-        '</div>';
-      box.querySelector('.sku-fix').dataset.code = code;
-    }
-
-    {
-      const res = document.getElementById('scanResult');
-      res.addEventListener('click', e => {
-        if (e.target.closest('.sku-fix-go')) findBySku();
-        if (e.target.closest('.sku-fix-skip')) skipNotFound();
-      });
-      res.addEventListener('keydown', e => {
-        if (e.target.classList.contains('sku-fix-input') && e.key === 'Enter') {
-          e.preventDefault();
-          findBySku();
-        }
-      });
-    }
-
-    function findBySku() {
-      const box = document.getElementById('scanResult');
-      const wrap = box.querySelector('.sku-fix');
-      if (!wrap) return;
-      const input = wrap.querySelector('.sku-fix-input');
-      const msg = box.querySelector('.sku-fix-msg');
-      const sku = input.value.trim();
-      if (!sku) { msg.textContent = 'Enter a SKU.'; return; }
-      const matches = items.skuIndex && items.skuIndex.get(normCode(sku));
-      if (!matches) {
-        // Neither the barcode nor the SKU was found
-        playWarning();
-        msg.textContent = 'SKU not found. Set item aside for review.';
-        wrap.dataset.skuFailed = '1';
-        input.select();
-        return;
-      }
-
-      const idx = matches[0];
-      const code = wrap.dataset.code;
-      input.blur();
-
-      // From now on this barcode finds the item on this device
-      const key = normCode(code);
-      if (key && !items.index.has(key)) items.index.set(key, [idx]);
-
-      // Record it on the "Barcode Update" sheet (sent in the background)
-      queueEntry({
-        type: 'link',
-        loc: state.location,
-        sku: items.rows[idx][0],
-        code: code,
-        initials: state.initials
-      });
-
-      playPop();
-      showItem(idx, code, 1);
-    }
-
-    function skipNotFound() {
-      const wrap = document.querySelector('#scanResult .sku-fix');
-      const failed = wrap && wrap.dataset.skuFailed === '1';
-      document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus(failed ? 'Set aside for review' : 'Skipped', 'warn');
-      reopenCameraIfUsing();
-    }
-
-    function showResultError(msg) {
-      clearCurrent();
-      document.getElementById('scanResult').innerHTML =
-        '<div class="result notfound"><h3>Error</h3><div>' + escapeHtml(msg) + '</div></div>';
-    }
-
-    /* ---------- quantity entry ---------- */
-
-    const QTY_MAX_DIGITS = 6;
-
-    function renderQty() {
-      const el = document.getElementById('qtyDisplay');
-      const q = current ? current.qty : '';
-      el.textContent = q === '' ? '0' : q;
-      el.classList.toggle('empty', q === '');
-      el.classList.toggle('default', !!(current && current.fresh));
-      document.getElementById('saveBtn').disabled = q === '';
-    }
-
-    function numpadKey(k) {
-      if (!current) return;
-      if (k === 'clear') { current.qty = ''; current.fresh = false; }
-      else if (k === 'back') { current.qty = current.fresh ? '' : current.qty.slice(0, -1); current.fresh = false; }
-      else if (/^\d$/.test(k)) {
-        if (current.fresh) { current.qty = k; current.fresh = false; } // replace the default 1
-        else if (current.qty.length < QTY_MAX_DIGITS) {
-          current.qty = (current.qty === '0' ? '' : current.qty) + k; // no leading zeros
-        }
-      }
-      renderQty();
-    }
-
-    // Numpad buttons never take focus, so the keyboard/scanner keep working
-    const numpadEl = document.getElementById('numpad');
-    numpadEl.addEventListener('mousedown', e => e.preventDefault());
-    numpadEl.addEventListener('click', e => {
-      const b = e.target.closest('button');
-      if (b) numpadKey(b.dataset.k);
-    });
-    ['saveBtn', 'skipBtn'].forEach(id =>
-      document.getElementById(id).addEventListener('mousedown', e => e.preventDefault()));
-    document.getElementById('saveBtn').addEventListener('click', saveCurrent);
-    document.getElementById('skipBtn').addEventListener('click', () => {
-      clearCurrent();
-      document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus('Skipped', 'warn');
-      reopenCameraIfUsing();
-    });
-
-    function clearCurrent() {
-      current = null;
-      document.getElementById('qtyPanel').style.display = 'none';
-    }
-
-    function setSaveStatus(msg, kind) {
-      const el = document.getElementById('saveStatus');
-      el.textContent = msg || '';
-      el.className = kind || '';
-    }
-
-    /* ---------- background saving ----------
-     *
-     * Saving never makes you wait. Each count goes into a queue that is
-     * kept on this device (so it survives a refresh or a dropped signal)
-     * and is sent to the sheet in the background. Counts that pile up while
-     * a save is running are sent together in one call.
-     *
-     * If the sheet can't be reached, the app keeps retrying automatically
-     * and shows a red warning. If the sheet rejects a count, the app beeps
-     * and lists it in the red warning until you dismiss it.
-     */
-    const QUEUE_KEY = 'inv_save_queue';
-    const BATCH_SIZE = 50;
-    let saveQueue = readQueue(); // waiting to be sent
-    let failedSaves = [];        // rejected by the sheet: [{ entry, error }]
-    let sending = false;
-    let retryTimer = null;
-    let retryDelay = 0;
-    let netError = '';           // set while the sheet can't be reached
-
-    function readQueue() {
-      try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { return []; }
-    }
-    function writeQueue() {
-      try { localStorage.setItem(QUEUE_KEY, JSON.stringify(saveQueue)); } catch (e) {}
-    }
-
-    function saveCurrent() {
-      if (!current) return;
-      if (current.qty === '') { setSaveStatus('Enter a quantity first', 'error'); return; }
-
-      const item = current;
-      const qty = Number(item.qty);
-      const entry = {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        loc: state.location,
-        index: item.index,
-        sku: item.sku,
-        code: item.code,
-        qty: qty,
-        zone: state.zone || '',
-        initials: state.initials
+    Object.keys(byLoc).forEach(function (loc) {
+      const idxs = byLoc[loc];
+      const failAll = function (msg) {
+        idxs.forEach(function (i) { results[i] = { error: msg }; });
       };
 
-      // Update "Counted so far" on this device right away
-      if (items.location === entry.loc) {
-        items.counts[item.index] = String((Number(items.counts[item.index]) || 0) + qty);
-      }
+      if (LOCATIONS.indexOf(loc) === -1) return failAll('Unknown location: ' + loc);
+      const sheet = ss.getSheetByName(loc);
+      if (!sheet) return failAll(loc + ' is not ready for counting yet.');
 
-      saveQueue.push(entry);
-      writeQueue();
+      const lastRow = sheet.getLastRow();
+      let allSkus = null;    // column E, read only if a row has moved
+      const totals = {};     // row number -> new total (for repeats in this batch)
+      const logRows = [];
 
-      // Clear the screen right away so the next item can be scanned
-      clearCurrent();
-      document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus('✓ Counted ' + qty + ' · Total ' + items.counts[item.index], 'ok');
-
-      renderSyncBar();
-      sendQueue();
-      reopenCameraIfUsing();
-    }
-
-    // Adds any other write (e.g. a barcode link) to the same background queue
-    function queueEntry(entry) {
-      entry.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-      saveQueue.push(entry);
-      writeQueue();
-      renderSyncBar();
-      sendQueue();
-    }
-
-    function sendQueue() {
-      if (sending || !saveQueue.length) return;
-      clearTimeout(retryTimer);
-      retryTimer = null;
-      sending = true;
-      const batch = saveQueue.slice(0, BATCH_SIZE);
-      renderSyncBar();
-
-      runServer()
-        .withSuccessHandler(results => {
-          sending = false;
-          retryDelay = 0;
-          netError = '';
-          const sent = new Set(batch.map(e => e.id));
-          saveQueue = saveQueue.filter(e => !sent.has(e.id));
-          writeQueue();
-
-          let anyFailed = false;
-          results.forEach((r, i) => {
-            const e = batch[i];
-            if (!r || r.error) {
-              anyFailed = true;
-              failedSaves.push({ entry: e, error: r ? r.error : 'No response' });
-              // Undo the on-device total for a count that didn't save
-              if (e.type !== 'link' && items.location === e.loc) {
-                items.counts[e.index] = String(Math.max((Number(items.counts[e.index]) || 0) - e.qty, 0));
-              }
-            } else if (e.type !== 'link' && items.location === e.loc &&
-                       !saveQueue.some(q => q.type !== 'link' && q.loc === e.loc && q.index === e.index)) {
-              // Use the sheet's total (includes other devices' counts)
-              items.counts[e.index] = String(r.total);
-            }
-          });
-          if (anyFailed) playWarning();
-
-          renderSyncBar();
-          if (saveQueue.length) sendQueue();
-        })
-        .withFailureHandler(err => {
-          sending = false;
-          if (isLoginError(err)) {
-            netError = 'Log in again to finish saving';
-            renderSyncBar();
-            return; // sent again after logging in
-          }
-          const firstFailure = !netError;
-          netError = err.message || 'Connection problem';
-          if (firstFailure) playWarning();
-          // Retry: 2s, 4s, 8s, 16s, then every 30s
-          retryDelay = Math.min(retryDelay ? retryDelay * 2 : 2000, 30000);
-          retryTimer = setTimeout(sendQueue, retryDelay);
-          renderSyncBar();
-        })
-        .saveCounts(batch);
-    }
-
-    function renderSyncBar() {
-      const bar = document.getElementById('syncBar');
-      const n = saveQueue.length;
-      const plural = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
-
-      if (failedSaves.length || netError) {
-        let html = '';
-        if (failedSaves.length) {
-          html += '<b>⚠ ' + plural(failedSaves.length, 'count') + ' could not be saved</b><ul>' +
-            failedSaves.map(f =>
-              '<li>' + escapeHtml(f.entry.code) +
-              (f.entry.type === 'link' ? ' · SKU ' + escapeHtml(f.entry.sku) + ' (barcode update)'
-                                       : ' · qty ' + f.entry.qty) +
-              (f.entry.zone ? ' · zone ' + escapeHtml(f.entry.zone) : '') +
-              ' — ' + escapeHtml(f.error) + '</li>').join('') +
-            '</ul>';
-        }
-        if (netError && n) {
-          html += '<div><b>⚠ Can\'t connect right now.</b> ' + plural(n, 'count') +
-                  ' waiting — retrying automatically. Don\'t close this page.</div>' +
-                  '<div style="margin-top:8px;"><button id="retryNowBtn">Retry now</button>';
-        } else {
-          html += '<div>';
-        }
-        if (failedSaves.length) html += '<button id="dismissFailedBtn">Dismiss</button>';
-        html += '</div>';
-        bar.innerHTML = html;
-        bar.className = 'error';
-      } else if (n) {
-        bar.textContent = 'Saving ' + plural(n, 'count') + '…';
-        bar.className = 'pending';
-      } else {
-        bar.textContent = '';
-        bar.className = '';
-      }
-    }
-
-    document.getElementById('syncBar').addEventListener('mousedown', e => e.preventDefault());
-    document.getElementById('syncBar').addEventListener('click', e => {
-      if (e.target.id === 'dismissFailedBtn') { failedSaves = []; renderSyncBar(); }
-      if (e.target.id === 'retryNowBtn') { retryDelay = 0; sendQueue(); }
-    });
-
-    // Try again as soon as the device is back online
-    window.addEventListener('online', () => { retryDelay = 0; sendQueue(); });
-
-    // Warn before closing the page with counts still unsent
-    // (they're kept on this device and resume next time the app opens)
-    window.addEventListener('beforeunload', e => {
-      if (saveQueue.length) { e.preventDefault(); e.returnValue = ''; }
-    });
-
-    /*
-     * Keyboard and scanner input anywhere on the scan screen.
-     *
-     * - No item waiting: keystrokes build a barcode; Enter/Tab looks it up.
-     * - Item waiting for a quantity: digits go into the quantity, Enter saves,
-     *   Backspace deletes, Esc skips. A scanner types much faster than a person,
-     *   so a fast burst ending in Enter is treated as a new barcode instead.
-     */
-    let scanBuffer = '';
-    let scanBufferTimer = null;
-    let burst = null; // { chars, start, last, qtyBefore, nonDigit }
-
-    function isEditable(el) {
-      return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
-                    el.tagName === 'SELECT' || el.isContentEditable);
-    }
-
-    function resetScanBuffer() {
-      scanBuffer = '';
-      clearTimeout(scanBufferTimer);
-      document.getElementById('scanInput').value = '';
-    }
-
-    function looksLikeScan(b, now) {
-      if (!b || b.chars.length < 4) return false;
-      if (now - b.last > 150) return false;        // a pause before Enter = a person
-      if (b.nonDigit) return true;                  // letters can't be a quantity
-      const avgGap = (b.last - b.start) / (b.chars.length - 1);
-      return avgGap < 40;                            // scanners type in a few ms per key
-    }
-
-    document.addEventListener('keydown', e => {
-      if (!isStepActive('stepScan')) return;
-      if (isEditable(e.target)) return; // typing in a box handles itself
-      if (e.ctrlKey || e.altKey || e.metaKey) return;
-      const now = performance.now();
-
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        if (current) {
-          if (looksLikeScan(burst, now)) {
-            current.qty = burst.qtyBefore; // undo digits the scanner typed
-            current.fresh = burst.freshBefore;
-            renderQty();
-            const code = burst.chars;
-            burst = null;
-            resetScanBuffer();
-            handleCode(code);
-          } else {
-            burst = null;
-            saveCurrent();
-          }
-        } else if (scanBuffer) {
-          const code = scanBuffer;
-          burst = null;
-          resetScanBuffer();
-          handleCode(code);
-        }
-        return;
-      }
-
-      if (current && e.key === 'Backspace') { e.preventDefault(); burst = null; numpadKey('back'); return; }
-      if (current && e.key === 'Escape') { e.preventDefault(); burst = null; document.getElementById('skipBtn').click(); return; }
-      if (e.key.length !== 1) return; // ignore arrows, Shift, etc.
-      e.preventDefault();
-
-      // Track how fast keys are arriving
-      if (!burst || now - burst.last > 100) {
-        burst = {
-          chars: '', start: now, last: now, nonDigit: false,
-          qtyBefore: current ? current.qty : '',
-          freshBefore: current ? current.fresh : false
-        };
-      }
-      burst.chars += e.key;
-      burst.last = now;
-      if (!/\d/.test(e.key)) burst.nonDigit = true;
-
-      if (current) {
-        if (/\d/.test(e.key) && !burst.nonDigit) numpadKey(e.key);
-      } else {
-        scanBuffer += e.key;
-        document.getElementById('scanInput').value = scanBuffer;
-        // Drop stray keystrokes if no Enter arrives
-        clearTimeout(scanBufferTimer);
-        scanBufferTimer = setTimeout(resetScanBuffer, 5000);
-      }
-    });
-
-    updateSummary();
-
-
-    /* ---------- phone camera scanning ----------
-     *
-     * Tap the camera button to scan with the phone's camera. After a scan the
-     * camera closes so you can enter the quantity; once you Save or Skip it
-     * opens again for the next item.
-     *
-     * Barcodes are read with the phone's built-in reader where it has one
-     * (Android), otherwise with the same reader engine (ZXing) loaded on
-     * demand, which is what iPhones use.
-     *
-     * The live camera doesn't work inside Google's Apps Script frame,
-     * so phones use the GitHub copy of this page.
-     */
-    const DETECTOR_URL = 'https://fastly.jsdelivr.net/npm/barcode-detector@3/dist/es/ponyfill.min.js';
-    const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39',
-                     'code_93', 'itf', 'codabar', 'qr_code'];
-    let detectorPromise = null;
-    let stream = null;       // live camera
-    let scanning = false;    // scan loop running
-    let cameraMode = false;  // keep reopening the camera after each item
-    let idleTimer = null;    // turns the camera off after a while unused
-    const CAMERA_IDLE_MS = 3 * 60 * 1000;
-
-    const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-    if (isTouch) document.body.classList.add('touch');
-
-    const camVideo = document.getElementById('camVideo');
-    const camCanvas = document.createElement('canvas');
-    const camCtx = camCanvas.getContext('2d', { willReadFrequently: true });
-
-    function getDetector() {
-      if (!detectorPromise) {
-        detectorPromise = (async () => {
-          // Built-in reader (Android Chrome) if it handles product barcodes
-          if (window.BarcodeDetector) {
-            try {
-              const sup = await window.BarcodeDetector.getSupportedFormats();
-              if (sup.includes('ean_13')) {
-                return new window.BarcodeDetector({ formats: FORMATS.filter(f => sup.includes(f)) });
-              }
-            } catch (e) {}
-          }
-          // Otherwise the ZXing reader (iPhone and others)
-          const mod = await import(DETECTOR_URL);
-          return new mod.BarcodeDetector({ formats: FORMATS });
-        })().catch(e => { detectorPromise = null; throw e; });
-      }
-      return detectorPromise;
-    }
-
-    function setCamMsg(msg) {
-      const el = document.getElementById('camMsg');
-      el.textContent = msg || '';
-      el.className = '';
-    }
-    function camOpen() { return document.getElementById('camOverlay').classList.contains('open'); }
-
-    async function openCamera() {
-      if (!isStepActive('stepScan')) return;
-      ensureAudio();
-      cameraMode = true;
-      document.getElementById('camOverlay').classList.add('open');
-      clearTimeout(idleTimer);
-
-      // Camera still running from the last scan: just start reading again.
-      // (Restarting it would make the phone ask/announce camera access each time.)
-      if (stream && stream.getVideoTracks().some(t => t.readyState === 'live')) {
-        if (scanning) return;
-        try { await camVideo.play(); } catch (e) {}
+      idxs.forEach(function (i) {
+        const e = entries[i];
         try {
-          const detector = await getDetector();
-          if (!camOpen()) return;
-          setCamMsg('Hold the barcode inside the box');
-          scanning = true;
-          scanLoop(detector);
-        } catch (e) {
-          setCamMsg('Could not load the scanner. Check the connection and try again.');
-        }
-        return;
-      }
-      stopCamera();
-      setCamMsg('Starting camera…');
-
-      const detectorReady = getDetector(); // load the reader while the camera starts
-
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no camera');
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+          const qty = Number(e.qty);
+          if (!isFinite(qty) || qty < 0 || Math.floor(qty) !== qty) {
+            throw new Error('Quantity must be a whole number.');
           }
-        });
-      } catch (e) {
-        stream = null;
-        setCamMsg(inAppsScript
-          ? 'The camera can\'t be used on this link. Open the app from the GitHub link to scan with the camera.'
-          : 'Could not start the camera. Check that camera access is allowed for this browser, then try again.');
-        return;
-      }
-      if (!camOpen()) { stopCamera(); return; } // closed while starting
+          const skuKey = normCode_(e.sku);
+          let row = Number(e.index) + 2;
 
-      camVideo.srcObject = stream;
-      try { await camVideo.play(); } catch (e) {}
+          // One read gives the SKU check, name and current Count
+          let vals = row <= lastRow ? sheet.getRange(row, 1, 1, READ_COLS).getDisplayValues()[0] : null;
 
-      // Keep refocusing where the phone allows it
-      try {
-        const track = stream.getVideoTracks()[0];
-        const caps = track.getCapabilities ? track.getCapabilities() : {};
-        if (caps.focusMode && caps.focusMode.includes('continuous')) {
-          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-        }
-      } catch (e) {}
-
-      let detector;
-      try {
-        setCamMsg('Loading scanner…');
-        detector = await detectorReady;
-      } catch (e) {
-        setCamMsg('Could not load the scanner. Check the connection and try again.');
-        stopCamera();
-        return;
-      }
-      if (!camOpen() || !stream) { stopCamera(); return; }
-
-      setCamMsg('Hold the barcode inside the box');
-      scanning = true;
-      scanLoop(detector);
-    }
-
-    async function scanLoop(detector) {
-      while (scanning) {
-        const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
-        if (vw && vh && camVideo.readyState >= 2) {
-          // Read the middle band of the picture (where the aim box is),
-          // scaled down a little: faster, and the reader works better
-          const cropH = Math.round(vh * 0.5);
-          const sy = Math.round((vh - cropH) / 2);
-          const scale = Math.min(1, 1280 / vw);
-          camCanvas.width = Math.round(vw * scale);
-          camCanvas.height = Math.round(cropH * scale);
-          camCtx.drawImage(camVideo, 0, sy, vw, cropH, 0, 0, camCanvas.width, camCanvas.height);
-          try {
-            const found = await detector.detect(camCanvas);
-            if (scanning && found && found.length) {
-              onCameraScan(found[0].rawValue);
-              return;
+          // If the sheet was rebuilt since the app loaded, find the SKU again
+          if (!vals || normCode_(vals[SKU_IDX]) !== skuKey) {
+            if (!allSkus) {
+              allSkus = sheet.getRange(2, SKU_IDX + 1, Math.max(lastRow - 1, 1), 1).getValues()
+                             .map(function (r) { return normCode_(r[0]); });
             }
-          } catch (e) {}
+            const found = allSkus.indexOf(skuKey);
+            if (found === -1) throw new Error('SKU ' + e.sku + ' is no longer in ' + loc + '.');
+            row = found + 2;
+            vals = sheet.getRange(row, 1, 1, READ_COLS).getDisplayValues()[0];
+          }
+
+          const current = (row in totals)
+            ? totals[row]
+            : (Number(String(vals[COUNT_COL - 1]).replace(/,/g, '')) || 0);
+          const total = current + qty;
+          totals[row] = total;
+
+          logRows.push([vals[SKU_IDX], itemName_(vals), qty, e.zone || '', e.initials || '']);
+          results[i] = { total: total };
+        } catch (err) {
+          results[i] = { error: err.message };
         }
-        await new Promise(r => setTimeout(r, 60));
-      }
-    }
+      });
 
-    /*
-     * Camera flow: scan → quantity pop-up over the camera → Save/Skip →
-     * straight back to scanning. A barcode that isn't found shows the red
-     * message for a moment, then scanning resumes on its own.
-     */
-    const camOverlayEl = document.getElementById('camOverlay');
-    const camSheetEl = document.getElementById('camSheet');
-    const resultEl = document.getElementById('scanResult');
-    const qtyPanelEl = document.getElementById('qtyPanel');
-    // Where these normally live on the scan screen
-    const resultHome = { parent: resultEl.parentNode, next: resultEl.nextSibling };
-    const qtyHome = { parent: qtyPanelEl.parentNode, next: qtyPanelEl.nextSibling };
-    let lastCamCode = '', lastCamTime = 0;
-    let resumeTimer = null;
-    let camMsgTimer = null;
+      // Write the new totals to column J
+      Object.keys(totals).forEach(function (row) {
+        sheet.getRange(Number(row), COUNT_COL).setValue(totals[row]);
+      });
 
-    function enterCamSheet() {
-      camSheetEl.appendChild(resultEl);
-      camSheetEl.appendChild(qtyPanelEl);
-      camOverlayEl.classList.add('sheet');
-    }
-
-    function exitCamSheet() {
-      clearTimeout(resumeTimer);
-      if (!camOverlayEl.classList.contains('sheet')) return;
-      camOverlayEl.classList.remove('sheet');
-      resultHome.parent.insertBefore(resultEl, resultHome.next);
-      qtyHome.parent.insertBefore(qtyPanelEl, qtyHome.next);
-    }
-
-    function inCamSheet() { return camOverlayEl.classList.contains('sheet'); }
-
-    function onCameraScan(text) {
-      text = String(text).trim();
-      scanning = false; // pause reading; the camera stays on
-      const now = Date.now();
-      // Same barcode still in view right after going back to the camera: ignore it,
-      // so an item isn't counted twice by accident (wait 2 seconds to rescan it)
-      if (text === lastCamCode && now - lastCamTime < 2000) {
-        lastCamTime = now;
-        openCamera();
-        return;
-      }
-      lastCamCode = text;
-      lastCamTime = now;
-
-      enterCamSheet();
-      handleCode(text);
-      // Not found (or an error): show it briefly, then keep scanning
-      resumeTimer = setTimeout(maybeResume, 1800);
-    }
-
-    function maybeResume() {
-      if (!inCamSheet() || current) return;          // waiting for a quantity
-      if (resultEl.querySelector('.sku-fix')) return; // waiting for a SKU or Skip
-      if (pendingScan) { resumeTimer = setTimeout(maybeResume, 500); return; } // still loading
-      lastCamTime = Date.now();
-      resultEl.innerHTML = '';
-      exitCamSheet();
-      openCamera();
-    }
-
-    function stopCamera() {
-      scanning = false;
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-      }
-      camVideo.srcObject = null;
-    }
-
-    // keepMode = true: hide the camera after a scan but keep it running for the
-    // next item (no new permission prompt). false: turn it off completely.
-    function closeCamera(keepMode) {
-      exitCamSheet();
-      document.getElementById('camOverlay').classList.remove('open');
-      scanning = false;
-      clearTimeout(idleTimer);
-      if (keepMode && stream) {
-        // Turn it off if it isn't used again for a while, to save battery
-        idleTimer = setTimeout(() => { cameraMode = false; stopCamera(); }, CAMERA_IDLE_MS);
-      } else {
-        cameraMode = false;
-        stopCamera();
-      }
-    }
-
-    // Turn the camera off when the app goes to the background
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && stream) {
-        const wasOpen = camOpen();
-        clearTimeout(idleTimer);
-        stopCamera();
-        if (wasOpen) closeCamera(false);
+      // Write all log rows in one go
+      if (logRows.length) {
+        const log = getScanLog_(loc);
+        log.getRange(log.getLastRow() + 1, 1, logRows.length, logRows[0].length)
+           .setValues(logRows);
       }
     });
 
-    // After Save / Skip, go straight back to the camera for the next item
-    function reopenCameraIfUsing() {
-      if (inCamSheet()) {
-        // Saved or skipped from the pop-up: straight back to scanning,
-        // with the result shown briefly under the camera
-        const msg = document.getElementById('saveStatus').textContent;
-        exitCamSheet();
-        lastCamTime = Date.now();
-        openCamera().then(() => flashCamMsg(msg));
-        return;
+    return results;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/*
+ * "Barcode Update" sheet: SKU and the barcode that was scanned but not found,
+ * so the barcode can be added to that SKU in the Data sheet later.
+ * Columns: A SKU, B Barcode, C Location, D Added By, E Date.
+ * A SKU + barcode pair already on the sheet isn't added twice.
+ */
+const BARCODE_UPDATE_SHEET = 'Barcode Update';
+const BARCODE_UPDATE_HEADERS = ['SKU', 'Barcode', 'Location', 'Added By', 'Date'];
+
+function saveBarcodeLinks_(entries, idxs, results) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(BARCODE_UPDATE_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(BARCODE_UPDATE_SHEET);
+    sheet.getRange(1, 1, 1, BARCODE_UPDATE_HEADERS.length)
+         .setValues([BARCODE_UPDATE_HEADERS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    sheet.getRange('A:B').setNumberFormat('@'); // keep SKUs and barcodes exactly as-is
+  }
+
+  // Pairs already recorded
+  const seen = {};
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, 2).getDisplayValues().forEach(function (r) {
+      seen[normCode_(r[0]) + '|' + normCode_(r[1])] = true;
+    });
+  }
+
+  const rows = [];
+  const now = new Date();
+  idxs.forEach(function (i) {
+    const e = entries[i];
+    try {
+      if (!e.sku || !e.code) throw new Error('Missing SKU or barcode.');
+      const key = normCode_(e.sku) + '|' + normCode_(e.code);
+      if (!seen[key]) {
+        seen[key] = true;
+        rows.push([String(e.sku), String(e.code), e.loc || '', e.initials || '', now]);
       }
-      if (cameraMode && isStepActive('stepScan')) setTimeout(openCamera, 250);
+      results[i] = { ok: true };
+    } catch (err) {
+      results[i] = { error: err.message };
     }
+  });
 
-    function flashCamMsg(msg) {
-      if (!msg || !camOpen()) return;
-      const el = document.getElementById('camMsg');
-      el.textContent = msg;
-      el.className = 'ok';
-      clearTimeout(camMsgTimer);
-      camMsgTimer = setTimeout(() => {
-        if (el.textContent === msg) { el.className = ''; setCamMsg('Hold the barcode inside the box'); }
-      }, 2000);
-    }
+  if (rows.length) {
+    const start = sheet.getLastRow() + 1;
+    sheet.getRange(start, 1, rows.length, 2).setNumberFormat('@');
+    sheet.getRange(start, 1, rows.length, rows[0].length).setValues(rows);
+  }
+}
 
-    document.getElementById('camClose').addEventListener('click', () => closeCamera(false));
-    document.getElementById('camBtn').addEventListener('mousedown', e => e.preventDefault());
+/** Gets the "<location> Scans" sheet, creating it with headers if needed. */
+function getScanLog_(location) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const name = location + ' Scans';
+  let log = ss.getSheetByName(name);
+  if (!log) {
+    log = ss.insertSheet(name);
+    const n = SCAN_LOG_HEADERS.length;
+    log.getRange(1, 1, 1, n).setValues([SCAN_LOG_HEADERS]).setFontWeight('bold');
+    log.setFrozenRows(1);
+    log.getRange('A:A').setNumberFormat('@'); // keep SKUs as text (leading zeros)
+  }
+  return log;
+}
 
-    // On phones, load the reader in the background so the camera is quick
-    if (isTouch) {
-      setTimeout(() => {
-        getDetector().then(d => {
-          const c = document.createElement('canvas'); c.width = c.height = 8;
-          return d.detect(c); // warms up the reader engine
-        }).catch(() => {});
-      }, 1500);
-    }
+/** Same barcode matching as the app: case-insensitive, numeric codes ignore leading zeros. */
+function normCode_(c) {
+  c = String(c).trim().toUpperCase();
+  if (/^\d+$/.test(c)) c = c.replace(/^0+(?=\d)/, '');
+  return c;
+}
 
-    // Resume any counts left unsent from last time
-    if (saveQueue.length) { renderSyncBar(); if (password) sendQueue(); }
+/**
+ * Reads the zone list for a location from the Zones sheet.
+ * Row 1 is the header and is skipped; blanks and duplicates are skipped too.
+ * @return {string[]|null}  null when the location has no zone step.
+ */
+function getZones_(location) {
+  const cols = ZONE_COLUMNS[location];
+  if (!cols) return null;
 
-    // Head start: begin loading items for the location this device used last,
-    // at the same time as the data above. Picking another location switches over.
-    function startHeadStart() {
-      try {
-        const lastLoc = localStorage.getItem('inv_last_loc');
-        if (lastLoc === 'FC' || lastLoc === 'MH' || lastLoc === 'BA') loadItems(lastLoc);
-      } catch (e) {}
-    }
-    // Runs last, once everything above is set up.
-    // Saved password on this device: go straight to locations and start loading.
-    // (If it no longer works, the login screen comes up.)
-    if (password) {
-      showStep('stepLocation');
-      loadAppData();
-      startHeadStart();
-    } else {
-      showStep('stepLogin');
-      // Wake the script while the password is being typed, so the check is quick
-      callServer('ping').catch(() => {});
-    }
-  </script>
-</body>
-</html>
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ZONES_SHEET);
+  if (!sheet) {
+    throw new Error('Zones are not set up yet.');
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  // One read covering all of this location's columns
+  const first = Math.min.apply(null, cols);
+  const last = Math.max.apply(null, cols);
+  const raw = sheet.getRange(2, first, lastRow - 1, last - first + 1).getDisplayValues();
+  const seen = {};
+  const zones = [];
+  cols.forEach(function (c) {          // column by column, top to bottom
+    raw.forEach(function (row) {
+      const z = String(row[c - first]).trim();
+      if (!z) return;
+      const key = z.toUpperCase();
+      if (seen[key]) return;
+      seen[key] = true;
+      zones.push(z);
+    });
+  });
+  return zones;
+}
