@@ -259,6 +259,26 @@
     }
 
     #status { margin-top: 18px; min-height: 1.4em; text-align: center; }
+    input[type=password] {
+      flex: 1;
+      min-width: 0;
+      padding: 14px;
+      font-size: 1.3rem;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+    }
+    input[type=password]:focus { outline: none; border-color: var(--accent); }
+    .logout-btn {
+      display: block;
+      margin: 28px auto 0;
+      padding: 6px 12px;
+      font-size: 0.9rem;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      text-decoration: underline;
+      cursor: pointer;
+    }
 
     /* Phone camera scanning */
     .cam-btn {
@@ -282,8 +302,25 @@
     }
     #camOverlay.open { display: block; }
     .cam-box { max-width: 520px; margin: 0 auto; }
-    #camReader { width: 100%; border-radius: 12px; overflow: hidden; background: #000; }
-    #camReader video { width: 100% !important; display: block; }
+    #camView {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 3 / 4;
+      max-height: 65vh;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+    }
+    #camVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
+    /* Aim box: barcodes are read from this middle band */
+    .cam-guide {
+      position: absolute;
+      left: 5%; right: 5%; top: 30%; bottom: 30%;
+      border: 3px solid rgba(255, 255, 255, 0.9);
+      border-radius: 10px;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+      pointer-events: none;
+    }
     #camMsg { margin: 14px 0; min-height: 1.3em; text-align: center; color: #fff; font-size: 1.05rem; }
     .cam-actions { display: flex; gap: 10px; }
     .cam-actions > * {
@@ -311,14 +348,25 @@
       <span class="chip" id="chipZone">Zone<b></b></span>
     </div>
 
+    <!-- Step 0: Login -->
+    <div class="step" id="stepLogin">
+      <h2>Enter the password</h2>
+      <div class="input-row">
+        <input type="password" id="passInput" autocomplete="current-password"
+               placeholder="Password" onkeydown="if(event.key==='Enter') submitLogin()">
+        <button class="go-btn" id="loginGo" onclick="submitLogin()">Log in</button>
+      </div>
+    </div>
+
     <!-- Step 1: Location -->
-    <div class="step active" id="stepLocation">
+    <div class="step" id="stepLocation">
       <h2>Choose a location</h2>
       <div class="loc-buttons">
         <button class="loc-btn" id="btnFC" onclick="pickLocation('FC')">FC</button>
         <button class="loc-btn" id="btnMH" onclick="pickLocation('MH')">MH</button>
         <button class="loc-btn" id="btnBA" onclick="pickLocation('BA')">BA</button>
       </div>
+      <button class="logout-btn" onclick="logOut()">Log out</button>
     </div>
 
     <!-- Step 2: Initials -->
@@ -398,7 +446,10 @@
   <!-- Camera scanner (phones / tablets) -->
   <div id="camOverlay">
     <div class="cam-box">
-      <div id="camReader"></div>
+      <div id="camView">
+        <video id="camVideo" playsinline muted autoplay></video>
+        <div class="cam-guide"></div>
+      </div>
       <div id="camMsg"></div>
       <div class="cam-actions">
         <label class="cam-photo-btn">Take photo
@@ -430,6 +481,7 @@
       if (id !== 'stepScan') { clearCurrent(); closeCamera(false); }
       updateSummary();
       if (id === 'stepInitials') focusLater('initialsInput');
+      if (id === 'stepLogin') focusLater('passInput');
       if (id === 'stepZone') { document.getElementById('zoneInput').value = ''; renderZones(); focusLater('zoneInput'); }
       // No auto-focus on the scan box: scans are captured anywhere on the
       // screen, and focusing would pop up the phone keyboard.
@@ -526,34 +578,100 @@
      * Inside Apps Script the app uses google.script.run. When this same page
      * is opened on its own (outside Google's frame, so the live camera works)
      * it calls the Apps Script web app at API_URL instead.
+     * Every call carries the password, which the sheet checks.
      */
     const API_URL = 'https://script.google.com/macros/s/AKfycbyxtI6PT40vcf1em5DV6QGqmRVSsMDiqRm9WCz0bpki3l7FHyvPtJMxWiOX92L2Jm5t/exec';
     const inAppsScript = !!(window.google && google.script && google.script.run);
 
+    let password = '';
+    try { password = localStorage.getItem('inv_pass') || ''; } catch (e) {}
+
+    function isLoginError(err) {
+      return /LOGIN_REQUIRED/.test(err && err.message || '');
+    }
+
+    function callServer(fn, ...args) {
+      return new Promise((resolve, reject) => {
+        if (inAppsScript) {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)[fn](...args, password);
+          return;
+        }
+        fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight
+          body: JSON.stringify({ action: fn, args: args, pass: password })
+        })
+          .then(r => r.json())
+          .then(j => { if (!j.ok) throw new Error(j.error || 'Server error'); resolve(j.data); })
+          .catch(err => {
+            const msg = err && err.message && !/fetch|network|load failed|json/i.test(err.message)
+              ? err.message : 'Connection problem';
+            reject(new Error(msg));
+          });
+      });
+    }
+
+    // Same style as google.script.run: runServer().withSuccessHandler(..).getItems(loc)
     function runServer() {
-      if (inAppsScript) return google.script.run;
       let onOk = () => {}, onFail = () => {};
-      const handle = req => req
-        .then(r => r.json())
-        .then(j => { if (!j.ok) throw new Error(j.error || 'Server error'); onOk(j.data); })
-        .catch(err => {
-          const msg = err && err.message && !/fetch|network|load failed/i.test(err.message)
-            ? err.message : 'Connection problem';
-          onFail(new Error(msg));
-        });
+      const go = (fn, ...a) => callServer(fn, ...a).then(
+        d => onOk(d),
+        err => { if (isLoginError(err)) loginExpired(); onFail(err); }
+      );
       return {
         withSuccessHandler(f) { onOk = f; return this; },
         withFailureHandler(f) { onFail = f; return this; },
-        getAppData() { handle(fetch(API_URL + '?action=appData')); },
-        getItems(loc) { handle(fetch(API_URL + '?action=items&loc=' + encodeURIComponent(loc))); },
-        saveCounts(entries) {
-          handle(fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS preflight
-            body: JSON.stringify({ action: 'save', entries: entries })
-          }));
-        }
+        getAppData() { go('getAppData'); },
+        getItems(loc) { go('getItems', loc); },
+        saveCounts(entries) { go('saveCounts', entries); }
       };
+    }
+
+    /* ---------- login ---------- */
+
+    function submitLogin() {
+      const val = document.getElementById('passInput').value.trim();
+      if (!val) { setStatus('Enter the password.', true); return; }
+      const btn = document.getElementById('loginGo');
+      btn.disabled = true;
+      setStatus('Checking…');
+      password = val;
+      callServer('getAppData')
+        .then(d => {
+          btn.disabled = false;
+          try { localStorage.setItem('inv_pass', password); } catch (e) {}
+          document.getElementById('passInput').value = '';
+          appData = d;
+          appDataFailed = false;
+          showStep('stepLocation');
+          startHeadStart();
+          if (saveQueue.length) { retryDelay = 0; netError = ''; sendQueue(); }
+        })
+        .catch(err => {
+          btn.disabled = false;
+          password = '';
+          setStatus(isLoginError(err) ? 'Wrong password.' : err.message, true);
+        });
+    }
+
+    // The saved password stopped working (changed on the Login sheet)
+    function loginExpired() {
+      if (isStepActive('stepLogin')) return;
+      password = '';
+      try { localStorage.removeItem('inv_pass'); } catch (e) {}
+      appData = null;
+      showStep('stepLogin');
+      setStatus('Please log in again.', true);
+    }
+
+    function logOut() {
+      password = '';
+      try { localStorage.removeItem('inv_pass'); } catch (e) {}
+      appData = null;
+      items.location = null; items.index = null; items.rows = []; items.loading = false;
+      showStep('stepLogin');
     }
 
     let appData = null;       // filled by getAppData()
@@ -1019,6 +1137,11 @@
         })
         .withFailureHandler(err => {
           sending = false;
+          if (isLoginError(err)) {
+            netError = 'Log in again to finish saving';
+            renderSyncBar();
+            return; // sent again after logging in
+          }
           const firstFailure = !netError;
           netError = err.message || 'Connection problem';
           if (firstFailure) playWarning();
@@ -1170,54 +1293,59 @@
     });
 
     updateSummary();
-    loadAppData(); // start loading right away, while the location screen is showing
+
 
     /* ---------- phone camera scanning ----------
      *
      * Tap the camera button to scan with the phone's camera. After a scan the
      * camera closes so you can enter the quantity; once you Save or Skip it
-     * opens again for the next item. "Take photo" is a backup for phones or
-     * browsers that block the live camera: it opens the camera app, and the
-     * barcode is read from the photo.
+     * opens again for the next item.
+     *
+     * Barcodes are read with the phone's built-in reader where it has one
+     * (Android), otherwise with the same reader engine (ZXing) loaded on
+     * demand, which is what iPhones use.
+     *
+     * "Take photo" is a backup for browsers that block the live camera
+     * (such as inside Google's Apps Script frame).
      */
-    const SCAN_LIB_URL = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-    let scanLibPromise = null;
-    let cam = null;          // the scanner
-    let camActive = false;   // live camera is running
+    const DETECTOR_URL = 'https://fastly.jsdelivr.net/npm/barcode-detector@3/dist/es/ponyfill.min.js';
+    const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39',
+                     'code_93', 'itf', 'codabar', 'qr_code'];
+    let detectorPromise = null;
+    let stream = null;       // live camera
+    let scanning = false;    // scan loop running
     let cameraMode = false;  // keep reopening the camera after each item
     let liveBlocked = false; // this browser/frame won't allow the live camera
 
     const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
     if (isTouch) document.body.classList.add('touch');
 
-    function loadScanLib() {
-      if (window.Html5Qrcode) return Promise.resolve();
-      if (!scanLibPromise) {
-        scanLibPromise = new Promise((resolve, reject) => {
-          const sc = document.createElement('script');
-          sc.src = SCAN_LIB_URL;
-          sc.onload = resolve;
-          sc.onerror = () => { scanLibPromise = null; reject(new Error('load failed')); };
-          document.head.appendChild(sc);
-        });
-      }
-      return scanLibPromise;
-    }
+    const camVideo = document.getElementById('camVideo');
+    const camCanvas = document.createElement('canvas');
+    const camCtx = camCanvas.getContext('2d', { willReadFrequently: true });
 
-    function getScanner() {
-      if (!cam) {
-        const F = Html5QrcodeSupportedFormats;
-        cam = new Html5Qrcode('camReader', {
-          verbose: false,
-          useBarCodeDetectorIfSupported: true, // fast native scanning where available
-          formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128,
-                             F.CODE_39, F.CODE_93, F.ITF, F.CODABAR, F.QR_CODE]
-        });
+    function getDetector() {
+      if (!detectorPromise) {
+        detectorPromise = (async () => {
+          // Built-in reader (Android Chrome) if it handles product barcodes
+          if (window.BarcodeDetector) {
+            try {
+              const sup = await window.BarcodeDetector.getSupportedFormats();
+              if (sup.includes('ean_13')) {
+                return new window.BarcodeDetector({ formats: FORMATS.filter(f => sup.includes(f)) });
+              }
+            } catch (e) {}
+          }
+          // Otherwise the ZXing reader (iPhone and others)
+          const mod = await import(DETECTOR_URL);
+          return new mod.BarcodeDetector({ formats: FORMATS });
+        })().catch(e => { detectorPromise = null; throw e; });
       }
-      return cam;
+      return detectorPromise;
     }
 
     function setCamMsg(msg) { document.getElementById('camMsg').textContent = msg || ''; }
+    function camOpen() { return document.getElementById('camOverlay').classList.contains('open'); }
 
     async function openCamera() {
       if (!isStepActive('stepScan')) return;
@@ -1226,52 +1354,100 @@
       // Live camera already failed here: go straight to the phone's camera app
       if (liveBlocked) { document.getElementById('camFile').click(); return; }
       document.getElementById('camOverlay').classList.add('open');
-      if (camActive) return;
+      if (stream) return;
       setCamMsg('Starting camera…');
 
-      try { await loadScanLib(); }
-      catch (e) { setCamMsg('Could not load the scanner. Check the connection and try again.'); return; }
-      if (!document.getElementById('camOverlay').classList.contains('open')) return; // closed meanwhile
+      const detectorReady = getDetector(); // load the reader while the camera starts
 
       try {
-        await getScanner().start(
-          { facingMode: 'environment' },
-          {
-            fps: 15,
-            // Wide, short scan area suits barcodes
-            qrbox: (w, h) => ({ width: Math.floor(w * 0.9), height: Math.floor(Math.min(h, w) * 0.5) })
-          },
-          onCameraScan,
-          () => {} // no barcode in this frame yet
-        );
-        camActive = true;
-        setCamMsg('Point the camera at a barcode');
-        // Closed while the camera was starting
-        if (!document.getElementById('camOverlay').classList.contains('open')) stopCamera();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no camera');
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        });
       } catch (e) {
+        stream = null;
         liveBlocked = true;
         setCamMsg('Live camera isn\'t available here. Tap "Take photo" to scan from a photo. ' +
                   'From now on the camera button will open the photo camera directly.');
+        return;
+      }
+      if (!camOpen()) { stopCamera(); return; } // closed while starting
+
+      camVideo.srcObject = stream;
+      try { await camVideo.play(); } catch (e) {}
+
+      // Keep refocusing where the phone allows it
+      try {
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+        }
+      } catch (e) {}
+
+      let detector;
+      try {
+        setCamMsg('Loading scanner…');
+        detector = await detectorReady;
+      } catch (e) {
+        setCamMsg('Could not load the scanner. Check the connection and try again.');
+        stopCamera();
+        return;
+      }
+      if (!camOpen() || !stream) { stopCamera(); return; }
+
+      setCamMsg('Hold the barcode inside the box');
+      scanning = true;
+      scanLoop(detector);
+    }
+
+    async function scanLoop(detector) {
+      while (scanning) {
+        const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+        if (vw && vh && camVideo.readyState >= 2) {
+          // Read the middle band of the picture (where the aim box is),
+          // scaled down a little: faster, and the reader works better
+          const cropH = Math.round(vh * 0.5);
+          const sy = Math.round((vh - cropH) / 2);
+          const scale = Math.min(1, 1280 / vw);
+          camCanvas.width = Math.round(vw * scale);
+          camCanvas.height = Math.round(cropH * scale);
+          camCtx.drawImage(camVideo, 0, sy, vw, cropH, 0, 0, camCanvas.width, camCanvas.height);
+          try {
+            const found = await detector.detect(camCanvas);
+            if (scanning && found && found.length) {
+              onCameraScan(found[0].rawValue);
+              return;
+            }
+          } catch (e) {}
+        }
+        await new Promise(r => setTimeout(r, 60));
       }
     }
 
     function onCameraScan(text) {
-      if (!camActive) return;
       closeCamera(true);
       handleCode(String(text).trim());
     }
 
-    async function stopCamera() {
-      if (cam && camActive) {
-        camActive = false;
-        try { await cam.stop(); } catch (e) {}
+    function stopCamera() {
+      scanning = false;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
       }
+      camVideo.srcObject = null;
     }
 
     function closeCamera(keepMode) {
       if (!keepMode) cameraMode = false;
       document.getElementById('camOverlay').classList.remove('open');
-      return stopCamera();
+      stopCamera();
     }
 
     // After Save / Skip, go straight back to the camera for the next item
@@ -1286,31 +1462,57 @@
       const file = e.target.files && e.target.files[0];
       e.target.value = '';
       if (!file) return;
+      document.getElementById('camOverlay').classList.add('open');
       setCamMsg('Reading barcode…');
+      const url = URL.createObjectURL(file);
       try {
-        await loadScanLib();
-        await stopCamera();
-        const text = await getScanner().scanFile(file, false);
+        const detector = await getDetector();
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        const found = await detector.detect(img);
+        if (!found || !found.length) throw new Error('none');
         closeCamera(true);
-        handleCode(String(text).trim());
+        handleCode(String(found[0].rawValue).trim());
       } catch (err) {
         playWarning();
         setCamMsg('No barcode found in that photo. Try again, closer and in good light.');
+      } finally {
+        URL.revokeObjectURL(url);
       }
     });
 
-    // Load the scanner in the background on phones so the camera opens fast
-    if (isTouch) setTimeout(() => loadScanLib().catch(() => {}), 1500);
+    // On phones, load the reader in the background so the camera is quick
+    if (isTouch) {
+      setTimeout(() => {
+        getDetector().then(d => {
+          const c = document.createElement('canvas'); c.width = c.height = 8;
+          return d.detect(c); // warms up the reader engine
+        }).catch(() => {});
+      }, 1500);
+    }
 
     // Resume any counts left unsent from last time
-    if (saveQueue.length) { renderSyncBar(); sendQueue(); }
+    if (saveQueue.length) { renderSyncBar(); if (password) sendQueue(); }
 
     // Head start: begin loading items for the location this device used last,
-    // at the same time as the data above. Picking the other location switches over.
-    try {
-      const lastLoc = localStorage.getItem('inv_last_loc');
-      if (lastLoc === 'FC' || lastLoc === 'MH' || lastLoc === 'BA') loadItems(lastLoc);
-    } catch (e) {}
+    // at the same time as the data above. Picking another location switches over.
+    function startHeadStart() {
+      try {
+        const lastLoc = localStorage.getItem('inv_last_loc');
+        if (lastLoc === 'FC' || lastLoc === 'MH' || lastLoc === 'BA') loadItems(lastLoc);
+      } catch (e) {}
+    }
+    // Runs last, once everything above is set up.
+    // Saved password on this device: go straight to locations and start loading.
+    // (If it no longer works, the login screen comes up.)
+    if (password) {
+      showStep('stepLocation');
+      loadAppData();
+      startHeadStart();
+    } else {
+      showStep('stepLogin');
+    }
   </script>
 </body>
 </html>
