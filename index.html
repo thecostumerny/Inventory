@@ -73,6 +73,26 @@
     }
     body.can-change .chip:active { background: #e3eefb; border-color: var(--accent); }
 
+    /* Keep the three pills on one line on phones: smaller text, and a long
+       value (like JD/MK) is cut off with "…" rather than wrapping */
+    #summary { flex-wrap: nowrap; gap: 6px; }
+    .chip {
+      display: inline-flex !important;
+      align-items: center;
+      min-width: 0;
+      flex: 0 1 auto;
+      white-space: nowrap;
+      padding: 5px 10px;
+      font-size: clamp(0.72rem, 3.3vw, 0.9rem) !important;
+    }
+    .chip[style*="none"] { display: none !important; }
+    .chip b { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    body.can-change .chip::after { flex: 0 0 auto; margin-left: 6px; }
+    @media (max-width: 360px) {
+      .chip { padding: 4px 8px; }
+      body.can-change .chip::after { margin-left: 4px; width: 5px; height: 5px; }
+    }
+
     /* Change-selection window */
     #pickModal {
       display: none;
