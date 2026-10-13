@@ -312,7 +312,7 @@
       position: fixed;
       inset: 0;
       z-index: 50;
-      background: rgba(0, 0, 0, 0.92);
+      background: #111;
       padding: 16px;
       overflow-y: auto;
     }
@@ -338,6 +338,18 @@
       pointer-events: none;
     }
     #camMsg { margin: 14px 0; min-height: 1.3em; text-align: center; color: #fff; font-size: 1.05rem; }
+    #camMsg.ok { color: #a5d6a7; font-weight: bold; }
+
+    /* Quantity pop-up over the camera: the item and number pad move in here,
+       then back to the camera for the next scan */
+    #camSheet { display: none; }
+    #camOverlay.sheet #camView,
+    #camOverlay.sheet #camMsg,
+    #camOverlay.sheet .cam-photo-btn { display: none; }
+    #camOverlay.sheet #camSheet { display: block; }
+    #camSheet #scanResult { margin-top: 0; }
+    #camSheet .qty-panel { margin-top: 10px; }
+    #camOverlay.sheet .cam-actions { margin-top: 10px; }
     .cam-actions { display: flex; gap: 10px; }
     .cam-actions > * {
       flex: 1;
@@ -530,6 +542,7 @@
         <div class="cam-guide"></div>
       </div>
       <div id="camMsg"></div>
+      <div id="camSheet"></div>
       <div class="cam-actions">
         <label class="cam-photo-btn">Take photo
           <input type="file" id="camFile" accept="image/*" capture="environment" hidden>
@@ -1426,7 +1439,11 @@
       return detectorPromise;
     }
 
-    function setCamMsg(msg) { document.getElementById('camMsg').textContent = msg || ''; }
+    function setCamMsg(msg) {
+      const el = document.getElementById('camMsg');
+      el.textContent = msg || '';
+      el.className = '';
+    }
     function camOpen() { return document.getElementById('camOverlay').classList.contains('open'); }
 
     async function openCamera() {
@@ -1530,9 +1547,65 @@
       }
     }
 
+    /*
+     * Camera flow: scan → quantity pop-up over the camera → Save/Skip →
+     * straight back to scanning. A barcode that isn't found shows the red
+     * message for a moment, then scanning resumes on its own.
+     */
+    const camOverlayEl = document.getElementById('camOverlay');
+    const camSheetEl = document.getElementById('camSheet');
+    const resultEl = document.getElementById('scanResult');
+    const qtyPanelEl = document.getElementById('qtyPanel');
+    // Where these normally live on the scan screen
+    const resultHome = { parent: resultEl.parentNode, next: resultEl.nextSibling };
+    const qtyHome = { parent: qtyPanelEl.parentNode, next: qtyPanelEl.nextSibling };
+    let lastCamCode = '', lastCamTime = 0;
+    let resumeTimer = null;
+    let camMsgTimer = null;
+
+    function enterCamSheet() {
+      camSheetEl.appendChild(resultEl);
+      camSheetEl.appendChild(qtyPanelEl);
+      camOverlayEl.classList.add('sheet');
+    }
+
+    function exitCamSheet() {
+      clearTimeout(resumeTimer);
+      if (!camOverlayEl.classList.contains('sheet')) return;
+      camOverlayEl.classList.remove('sheet');
+      resultHome.parent.insertBefore(resultEl, resultHome.next);
+      qtyHome.parent.insertBefore(qtyPanelEl, qtyHome.next);
+    }
+
+    function inCamSheet() { return camOverlayEl.classList.contains('sheet'); }
+
     function onCameraScan(text) {
-      closeCamera(true);
-      handleCode(String(text).trim());
+      text = String(text).trim();
+      scanning = false; // pause reading; the camera stays on
+      const now = Date.now();
+      // Same barcode still in view right after going back to the camera: ignore it,
+      // so an item isn't counted twice by accident (wait 2 seconds to rescan it)
+      if (text === lastCamCode && now - lastCamTime < 2000) {
+        lastCamTime = now;
+        openCamera();
+        return;
+      }
+      lastCamCode = text;
+      lastCamTime = now;
+
+      enterCamSheet();
+      handleCode(text);
+      // Not found (or an error): show it briefly, then keep scanning
+      resumeTimer = setTimeout(maybeResume, 1800);
+    }
+
+    function maybeResume() {
+      if (!inCamSheet() || current) return;          // waiting for a quantity
+      if (pendingScan) { resumeTimer = setTimeout(maybeResume, 500); return; } // still loading
+      lastCamTime = Date.now();
+      resultEl.innerHTML = '';
+      exitCamSheet();
+      openCamera();
     }
 
     function stopCamera() {
@@ -1547,6 +1620,7 @@
     // keepMode = true: hide the camera after a scan but keep it running for the
     // next item (no new permission prompt). false: turn it off completely.
     function closeCamera(keepMode) {
+      exitCamSheet();
       document.getElementById('camOverlay').classList.remove('open');
       scanning = false;
       clearTimeout(idleTimer);
@@ -1571,7 +1645,27 @@
 
     // After Save / Skip, go straight back to the camera for the next item
     function reopenCameraIfUsing() {
+      if (inCamSheet()) {
+        // Saved or skipped from the pop-up: straight back to scanning,
+        // with the result shown briefly under the camera
+        const msg = document.getElementById('saveStatus').textContent;
+        exitCamSheet();
+        lastCamTime = Date.now();
+        openCamera().then(() => flashCamMsg(msg));
+        return;
+      }
       if (cameraMode && !liveBlocked && isStepActive('stepScan')) setTimeout(openCamera, 250);
+    }
+
+    function flashCamMsg(msg) {
+      if (!msg || !camOpen()) return;
+      const el = document.getElementById('camMsg');
+      el.textContent = msg;
+      el.className = 'ok';
+      clearTimeout(camMsgTimer);
+      camMsgTimer = setTimeout(() => {
+        if (el.textContent === msg) { el.className = ''; setCamMsg('Hold the barcode inside the box'); }
+      }, 2000);
     }
 
     document.getElementById('camClose').addEventListener('click', () => closeCamera(false));
