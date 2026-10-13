@@ -45,6 +45,9 @@
       margin: 12px 0 4px;
     }
     .chip {
+      font: inherit;
+      color: var(--text);
+      cursor: default;
       padding: 6px 12px;
       background: var(--card);
       border: 1px solid var(--border);
@@ -52,6 +55,58 @@
       font-size: 0.9rem;
     }
     .chip b { margin-left: 4px; }
+    /* On the scan screen the pills can be tapped to change that choice */
+    body.can-change .chip {
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    body.can-change .chip::after {
+      content: '';
+      display: inline-block;
+      width: 6px; height: 6px;
+      margin-left: 7px;
+      border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted);
+      transform: translateY(-3px) rotate(45deg);
+    }
+    body.can-change .chip:active { background: #e3eefb; border-color: var(--accent); }
+
+    /* Change-selection window */
+    #pickModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      background: rgba(0, 0, 0, 0.45);
+      padding: 16px;
+      overflow-y: auto;
+    }
+    #pickModal.open { display: block; }
+    .pick-box {
+      max-width: 520px;
+      margin: 8vh auto 0;
+      padding: 18px 16px;
+      background: var(--bg);
+      border-radius: 14px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+    }
+    .pick-box h2 { margin: 0 0 14px; font-size: 1.2rem; text-align: center; }
+    .pick-msg { min-height: 1.3em; margin-top: 10px; text-align: center; color: var(--error); font-weight: bold; }
+    .pick-cancel {
+      display: block; width: 100%; margin-top: 12px; padding: 12px 0;
+      font-size: 1.05rem; background: transparent; color: var(--text);
+      border: 1px solid var(--muted); border-radius: 10px; cursor: pointer;
+    }
+    #pickZoneGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
 
     .step { display: none; margin-top: 20px; }
     .step.active { display: block; }
@@ -75,6 +130,9 @@
     #btnFC { background: var(--fc); }
     #btnMH { background: var(--mh); }
     #btnBA { background: var(--ba); }
+    .loc-btn[data-loc="FC"] { background: var(--fc); }
+    .loc-btn[data-loc="MH"] { background: var(--mh); }
+    .loc-btn[data-loc="BA"] { background: var(--ba); }
 
     /* Inputs */
     .input-row { display: flex; gap: 10px; }
@@ -446,9 +504,9 @@
     <h1>Inventory</h1>
 
     <div id="summary">
-      <span class="chip" id="chipLoc">Location<b></b></span>
-      <span class="chip" id="chipInit">Initials<b></b></span>
-      <span class="chip" id="chipZone">Zone<b></b></span>
+      <button type="button" class="chip" id="chipLoc" data-pick="location">Location<b></b></button>
+      <button type="button" class="chip" id="chipInit" data-pick="initials">Initials<b></b></button>
+      <button type="button" class="chip" id="chipZone" data-pick="zone">Zone<b></b></button>
     </div>
 
     <!-- Step 0: Login -->
@@ -550,6 +608,16 @@
     <div id="status"></div>
   </div>
 
+  <!-- Window for changing location / initials / zone from the scan screen -->
+  <div id="pickModal">
+    <div class="pick-box">
+      <h2 id="pickTitle"></h2>
+      <div id="pickBody"></div>
+      <div class="pick-msg" id="pickMsg"></div>
+      <button type="button" class="pick-cancel" id="pickCancel">Cancel</button>
+    </div>
+  </div>
+
   <!-- Camera scanner (phones / tablets) -->
   <div id="camOverlay">
     <div class="cam-box">
@@ -619,6 +687,7 @@
       set('chipInit', state.location && state.initials && !isStepActive('stepInitials') ? state.initials : '');
       set('chipZone', state.zone);
       document.getElementById('summary').style.display = state.location ? 'flex' : 'none';
+      document.body.classList.toggle('can-change', isStepActive('stepScan'));
     }
 
     function isStepActive(id) {
@@ -1481,6 +1550,7 @@
 
     document.addEventListener('keydown', e => {
       if (!isStepActive('stepScan')) return;
+      if (pickOpen()) { if (e.key === 'Escape' && pickCancelable) closePick(); return; }
       if (isEditable(e.target)) return; // typing in a box handles itself
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       const now = performance.now();
@@ -1596,6 +1666,146 @@
       el.className = '';
     }
     function camOpen() { return document.getElementById('camOverlay').classList.contains('open'); }
+
+    /* ---------- change location / initials / zone from the scan screen ---------- */
+
+    const pickModal = document.getElementById('pickModal');
+    let pickCancelable = true;
+
+    function pickOpen() { return pickModal.classList.contains('open'); }
+
+    function openPick(title, html, cancelable) {
+      document.getElementById('pickTitle').textContent = title;
+      document.getElementById('pickBody').innerHTML = html;
+      document.getElementById('pickMsg').textContent = '';
+      pickCancelable = cancelable !== false;
+      document.getElementById('pickCancel').style.display = pickCancelable ? 'block' : 'none';
+      pickModal.classList.add('open');
+    }
+
+    function closePick() { pickModal.classList.remove('open'); }
+    function pickMsg(t) { document.getElementById('pickMsg').textContent = t || ''; }
+
+    // Finished a change: stay on the scan screen with the new choice
+    function afterPickChange(note) {
+      closePick();
+      updateSummary();
+      saveSession();
+      setSaveStatus(note, 'ok');
+    }
+
+    document.getElementById('summary').addEventListener('click', e => {
+      const chip = e.target.closest('.chip');
+      if (!chip || !isStepActive('stepScan') || pickOpen()) return;
+      if (chip.dataset.pick === 'location') openLocationPick();
+      if (chip.dataset.pick === 'initials') openInitialsPick();
+      if (chip.dataset.pick === 'zone') openZonePick(false);
+    });
+    document.getElementById('pickCancel').addEventListener('click', () => { if (pickCancelable) closePick(); });
+    pickModal.addEventListener('click', e => { if (e.target === pickModal && pickCancelable) closePick(); });
+
+    // Location
+    function openLocationPick() {
+      openPick('Change location',
+        '<div class="loc-buttons">' +
+          ['FC', 'MH', 'BA'].map(l =>
+            '<button type="button" class="loc-btn" data-loc="' + l + '"' +
+            (l === state.location ? ' style="outline:4px solid var(--text);outline-offset:-4px"' : '') +
+            '>' + l + '</button>').join('') +
+        '</div>');
+    }
+
+    function changeLocation(loc) {
+      if (loc === state.location) { closePick(); return; }
+      if (!appData) { pickMsg('Still loading. Try again in a moment.'); loadAppData(); return; }
+      const info = appData[loc];
+      if (!info || info.error) { pickMsg(info ? info.error : 'Unknown location'); return; }
+
+      state.location = loc;
+      state.itemCount = info.itemCount;
+      state.zones = info.zones;
+      state.zone = null;
+      clearCurrent();
+      document.getElementById('scanResult').innerHTML = '';
+      if (items.error) items.location = null;
+      loadItems(loc);
+      try { localStorage.setItem('inv_last_loc', loc); } catch (e) {}
+
+      if (state.zones) {
+        updateSummary();
+        openZonePick(true); // this location needs a zone
+      } else {
+        afterPickChange('Location changed to ' + loc);
+      }
+    }
+
+    // Initials
+    function openInitialsPick() {
+      openPick('Change initials',
+        '<div class="input-row">' +
+          '<input type="text" id="pickInitials" maxlength="11" autocomplete="off" placeholder="e.g. JD or JD/MK">' +
+          '<button type="button" class="go-btn" id="pickInitialsGo">Save</button>' +
+        '</div>');
+      const input = document.getElementById('pickInitials');
+      input.value = state.initials;
+      input.addEventListener('input', () => { input.value = cleanInitials(input.value); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveInitialsPick(); } });
+      document.getElementById('pickInitialsGo').addEventListener('click', saveInitialsPick);
+      setTimeout(() => { input.focus(); input.select(); }, 50);
+    }
+
+    function saveInitialsPick() {
+      const val = cleanInitials(document.getElementById('pickInitials').value).replace(/^\/+|\/+$/g, '');
+      if (letterCount(val) < 2) { pickMsg('Please enter at least 2 letters.'); return; }
+      state.initials = val;
+      try { localStorage.setItem('inv_initials', val); } catch (e) {}
+      afterPickChange('Initials changed to ' + val);
+    }
+
+    // Zone (required = just changed to a location that needs one: no Cancel)
+    function openZonePick(required) {
+      if (!state.zones) return; // this location has no zones
+      openPick(required ? 'Choose a zone for ' + state.location : 'Change zone',
+        '<div class="input-row">' +
+          '<input type="text" id="pickZoneInput" autocomplete="off" placeholder="Zone">' +
+        '</div>' +
+        '<div id="pickZoneGrid"></div>', !required);
+      const input = document.getElementById('pickZoneInput');
+      const render = () => {
+        const typed = input.value.trim().toUpperCase();
+        const list = state.zones.filter(z => z.toUpperCase().includes(typed));
+        document.getElementById('pickZoneGrid').innerHTML = list.length
+          ? list.map(z => '<button type="button" class="zone-btn" data-zone="' + escapeHtml(z) + '"' +
+              (z === state.zone ? ' style="border-color:var(--accent);background:#e3eefb"' : '') +
+              '>' + escapeHtml(z) + '</button>').join('')
+          : '<div style="grid-column:1/-1;text-align:center;color:var(--muted)">No matching zones</div>';
+      };
+      input.addEventListener('input', render);
+      input.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const typed = input.value.trim().toUpperCase();
+        if (!typed) return;
+        const exact = state.zones.find(z => z.toUpperCase() === typed);
+        const matches = state.zones.filter(z => z.toUpperCase().includes(typed));
+        if (exact) changeZone(exact);
+        else if (matches.length === 1) changeZone(matches[0]);
+        else pickMsg(matches.length ? 'More than one zone matches. Tap the one you want.' : 'That zone isn\'t in the list.');
+      });
+      render();
+    }
+
+    function changeZone(zone) {
+      state.zone = zone;
+      afterPickChange('Zone changed to ' + zone);
+    }
+
+    document.getElementById('pickBody').addEventListener('click', e => {
+      const locBtn = e.target.closest('[data-loc]');
+      if (locBtn) { changeLocation(locBtn.dataset.loc); return; }
+      const zoneBtn = e.target.closest('.zone-btn');
+      if (zoneBtn) changeZone(zoneBtn.dataset.zone);
+    });
 
     async function openCamera() {
       if (!isStepActive('stepScan')) return;
