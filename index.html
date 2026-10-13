@@ -583,7 +583,7 @@
       // Clear choices made at or after this step
       if (id === 'stepLocation') { state.location = null; state.zone = null; setLocButtonsDisabled(false); }
       if (id === 'stepInitials' || id === 'stepZone') { state.zone = null; }
-      if (id !== 'stepScan') { clearCurrent(); closeCamera(false); }
+      if (id !== 'stepScan') { clearCurrent(); closeCamera(false); clearSession(); }
       updateSummary();
       if (id === 'stepInitials') focusLater('initialsInput');
       if (id === 'stepLogin') focusLater('passInput');
@@ -790,6 +790,17 @@
         .withSuccessHandler(d => {
           appData = d;
           if (pendingLoc) { const l = pendingLoc; pendingLoc = null; pickLocation(l); }
+          // Resumed straight onto the scan screen: finish setting up that location
+          if (state.location && isStepActive('stepScan')) {
+            const info = d[state.location];
+            if (!info || info.error) {
+              showStep('stepLocation');
+              setStatus(info ? info.error : 'Unknown location', true);
+            } else {
+              state.zones = info.zones;
+              state.itemCount = info.itemCount;
+            }
+          }
         })
         .withFailureHandler(err => {
           appDataFailed = true;
@@ -1002,6 +1013,38 @@
       setSaveStatus('');
       showStep('stepScan');
       updateSummary();
+      saveSession();
+    }
+
+    /*
+     * Resume where you left off: the location, initials and zone are kept on
+     * the device while you're on the scan screen, so reopening the app (e.g.
+     * from a home-screen shortcut) goes straight back to scanning. Going back
+     * a step, logging out, or 12 hours passing starts fresh.
+     */
+    const SESSION_KEY = 'inv_session';
+    const SESSION_MAX_AGE = 12 * 60 * 60 * 1000;
+
+    function saveSession() {
+      try {
+        localStorage.setItem(SESSION_KEY, JSON.stringify({
+          loc: state.location, initials: state.initials, zone: state.zone, t: Date.now()
+        }));
+      } catch (e) {}
+    }
+
+    function clearSession() {
+      try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    }
+
+    function readSession() {
+      try {
+        const sess = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+        if (!sess || !sess.loc || !sess.initials) return null;
+        if (Date.now() - sess.t > SESSION_MAX_AGE) return null;
+        if (['FC', 'MH', 'BA'].indexOf(sess.loc) === -1) return null;
+        return sess;
+      } catch (e) { return null; }
     }
 
     function backFromScan() {
@@ -1811,9 +1854,21 @@
     // Saved password on this device: go straight to locations and start loading.
     // (If it no longer works, the login screen comes up.)
     if (password) {
-      showStep('stepLocation');
-      loadAppData();
-      startHeadStart();
+      const sess = readSession();
+      if (sess) {
+        // Pick up where this device left off
+        state.location = sess.loc;
+        state.initials = sess.initials;
+        state.zone = sess.zone || null;
+        state.zones = sess.zone ? [] : null; // real list arrives with the location details
+        loadItems(sess.loc);
+        goToScan();
+        loadAppData();
+      } else {
+        showStep('stepLocation');
+        loadAppData();
+        startHeadStart();
+      }
     } else {
       showStep('stepLogin');
       // Wake the script while the password is being typed, so the check is quick
