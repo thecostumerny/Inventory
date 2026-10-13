@@ -218,6 +218,9 @@
     .zone-done-btn.is-done { color: var(--muted); border-color: var(--border); }
 
     /* Small "View status" link */
+    /* Status is for admins only */
+    .admin-only { display: none !important; }
+    body.is-admin .admin-only { display: block !important; }
     .status-link {
       display: block;
       margin: 14px auto 0;
@@ -598,7 +601,7 @@
         <button class="loc-btn" id="btnMH" onclick="pickLocation('MH')">MH</button>
         <button class="loc-btn" id="btnBA" onclick="pickLocation('BA')">BA</button>
       </div>
-      <button class="status-link" onclick="openStatus()">View status</button>
+      <button class="status-link admin-only" onclick="openStatus()">View status</button>
       <button class="logout-btn" style="margin-top:4px" onclick="logOut()">Log out</button>
     </div>
 
@@ -676,7 +679,7 @@
 
       <button type="button" class="zone-done-btn" id="zoneDoneBtn" onclick="confirmZoneDone()" style="display:none"></button>
       <button class="back-btn" onclick="backFromScan()">Back</button>
-      <button class="status-link" onclick="openStatus()">View status</button>
+      <button class="status-link admin-only" onclick="openStatus()">View status</button>
     </div>
 
     <div id="status"></div>
@@ -886,6 +889,16 @@
 
     /* ---------- login ---------- */
 
+    // Login type from the Login sheet (column B). Admins can view the status.
+    let userType = '';
+    try { userType = localStorage.getItem('inv_type') || ''; } catch (e) {}
+    function applyUserType(t) {
+      userType = t || '';
+      try { localStorage.setItem('inv_type', userType); } catch (e) {}
+      document.body.classList.toggle('is-admin', userType.toLowerCase() === 'admin');
+    }
+    applyUserType(userType);
+
     function submitLogin() {
       const val = document.getElementById('passInput').value.trim();
       if (!val) { setStatus('Enter the password.', true); return; }
@@ -895,7 +908,8 @@
       password = val;
       // Quick check only; everything else loads afterwards in the background
       callServer('login')
-        .then(() => {
+        .then(res => {
+          applyUserType(res && res.type);
           btn.disabled = false;
           try { localStorage.setItem('inv_pass', password); } catch (e) {}
           document.getElementById('passInput').value = '';
@@ -915,6 +929,7 @@
     // The saved password stopped working (changed on the Login sheet)
     function loginExpired() {
       if (isStepActive('stepLogin')) return;
+      applyUserType('');
       password = '';
       try { localStorage.removeItem('inv_pass'); } catch (e) {}
       appData = null;
@@ -924,6 +939,7 @@
 
     function logOut() {
       closeCamera(false, true);
+      applyUserType('');
       password = '';
       try { localStorage.removeItem('inv_pass'); } catch (e) {}
       appData = null;
@@ -2256,6 +2272,10 @@
     // Saved password on this device: go straight to locations and start loading.
     // (If it no longer works, the login screen comes up.)
     if (password) {
+      // Refresh the login type in the background (it may have changed on the sheet)
+      callServer('login').then(res => applyUserType(res && res.type)).catch(err => {
+        if (isLoginError(err)) loginExpired();
+      });
       const sess = readSession();
       if (sess) {
         // Pick up where this device left off
