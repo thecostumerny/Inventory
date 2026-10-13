@@ -545,30 +545,77 @@
       #camView { aspect-ratio: auto; height: 60vh; }
     }
 
-    /* Tablets and computers: more room, side-by-side scan layout */
+    /* Tablets and computers: more room */
     @media (min-width: 820px) {
       .wrap { max-width: 900px; }
       #stepLocation, #stepInitials, #stepLogin, #stepZone { max-width: 560px; margin-left: auto; margin-right: auto; }
-      #stepScan.active {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        grid-template-areas:
-          "title  title"
-          "bar    bar"
-          "info   qty"
-          "done   done"
-          "back   back"
-          "status status";
-        column-gap: 24px;
-        align-items: start;
+    }
+
+    /* Tablet portrait: same stacked layout as a phone (quantity pad below
+       the item), just a little wider */
+    @media (min-width: 820px) and (orientation: portrait) {
+      #stepScan { max-width: 620px; margin-left: auto; margin-right: auto; }
+    }
+
+    /*
+     * Landscape (iPad sideways, computers): the quantity pad is its own panel
+     * down the right side (about 20% of the screen); everything else uses the
+     * other 80%. The panel shows a hint until an item is scanned.
+     */
+    @media (min-width: 820px) and (orientation: landscape) {
+      body.on-scan .wrap {
+        max-width: none;
+        margin-right: max(20vw, 240px);
+        padding-left: 24px;
+        padding-right: 24px;
       }
-      #stepScan > h2 { grid-area: title; }
-      #stepScan > .input-row { grid-area: bar; max-width: 560px; width: 100%; justify-self: center; }
-      #stepScan > .scan-info { grid-area: info; }
-      #stepScan > #qtyPanel { grid-area: qty; margin-top: 12px; }
-      #stepScan > .back-btn { grid-area: back; }
-      #stepScan > .zone-done-btn { grid-area: done; max-width: 560px; justify-self: center; }
-      #stepScan > .status-link { grid-area: status; }
+      body.on-scan #stepScan { max-width: 720px; margin-left: auto; margin-right: auto; }
+      body.on-scan #syncBar { margin-left: -24px; margin-right: -24px; }
+
+      /* the side panel */
+      body.on-scan::after,
+      body.on-scan #stepScan #qtyPanel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: max(20vw, 240px);
+        margin: 0;
+        border-radius: 0;
+        border-left: 1px solid var(--border);
+        background: var(--card);
+      }
+      /* empty-state hint behind the pad */
+      body.on-scan::after {
+        content: 'Scan an item to enter its quantity';
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 1rem;
+        z-index: 1;
+      }
+      body.on-scan #stepScan #qtyPanel {
+        z-index: 2;
+        box-shadow: none;
+        padding: max(16px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 16px 14px;
+        overflow-y: auto;
+        flex-direction: column;
+        justify-content: center;
+      }
+      body.on-scan #stepScan #qtyPanel[style*="block"] { display: flex !important; }
+      body.on-scan #stepScan .qty-row { flex-direction: column; }
+      body.on-scan #stepScan .qty-row .save-btn { padding: 14px 0; font-size: 1.25rem; }
+      body.on-scan #stepScan .qty-display { font-size: clamp(1.8rem, 3.6vw, 2.6rem); }
+      body.on-scan #stepScan .numpad { gap: 8px; }
+      body.on-scan #stepScan .numpad button { padding: clamp(10px, 2.4vh, 18px) 0; font-size: clamp(1.2rem, 2.2vw, 1.6rem); }
+      body.on-scan #stepScan .numpad button.fn { font-size: clamp(0.8rem, 1.2vw, 1rem); }
+      body.on-scan #stepScan .key-hint { font-size: 0.8rem; }
+      /* windows shown over the app stay above the side panel */
+      #pickModal, #camOverlay { z-index: 70; }
     }
   </style>
 </head>
@@ -766,6 +813,7 @@
       set('chipZone', state.zone);
       document.getElementById('summary').style.display = state.location ? 'flex' : 'none';
       document.body.classList.toggle('can-change', isStepActive('stepScan'));
+      document.body.classList.toggle('on-scan', isStepActive('stepScan'));
       const zd = document.getElementById('zoneDoneBtn');
       if (zd) {
         zd.style.display = state.zone ? 'block' : 'none';
