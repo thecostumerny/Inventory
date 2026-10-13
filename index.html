@@ -1958,28 +1958,42 @@
         updateSummary();
       }
 
-      const html = ['FC', 'MH', 'BA'].map(loc => {
+      // A location is selected: show just that one. Otherwise show them all.
+      const locs = state.location ? [state.location] : ['FC', 'MH', 'BA'];
+      document.getElementById('pickTitle').textContent = state.location ? state.location + ' status' : 'Status';
+
+      const html = locs.map(loc => {
         const s = st[loc];
         if (!s || !s.ready) {
           return '<div class="st-loc"><div class="st-head"><b>' + loc + '</b><span class="st-sub">Not started</span></div></div>';
         }
-        const pct = s.items ? Math.round(s.counted / s.items * 100) : 0;
+
+        // Progress bar = zones complete
         let zonesHtml = '';
-        if (s.zones) {
+        let headRight = '';
+        if (s.zones && s.zones.length) {
           const doneSet = new Set((s.done || []).map(z => z.toUpperCase()));
           const doneN = s.zones.filter(z => doneSet.has(z.toUpperCase())).length;
+          const pct = Math.round(doneN / s.zones.length * 100);
+          headRight = doneN + ' of ' + s.zones.length + ' zones complete';
           zonesHtml =
-            '<div class="st-sub" style="margin-top:8px">Zones: <b>' + doneN + ' of ' + s.zones.length + '</b> complete</div>' +
+            '<div class="st-bar"><span style="width:' + pct + '%"></span></div>' +
             '<div class="st-zones">' + s.zones.map(z =>
               '<span class="st-zone' + (doneSet.has(z.toUpperCase()) ? ' done' : '') + '">' + escapeHtml(z) + '</span>'
             ).join('') + '</div>';
         }
+
+        // Items: only those with expected stock
+        const itemsHtml = s.items
+          ? '<div class="st-sub" style="margin-top:8px">' + s.counted.toLocaleString() + ' of ' +
+              s.items.toLocaleString() + ' items with expected stock counted · ' +
+              s.units.toLocaleString() + ' units</div>'
+          : '<div class="st-sub" style="margin-top:8px">No items with expected stock</div>';
+
         return '<div class="st-loc">' +
-          '<div class="st-head"><b>' + loc + '</b><span class="st-sub">' + pct + '% of items counted</span></div>' +
-          '<div class="st-bar"><span style="width:' + pct + '%"></span></div>' +
-          '<div class="st-sub">' + s.counted.toLocaleString() + ' of ' + s.items.toLocaleString() +
-            ' items · ' + s.units.toLocaleString() + ' units</div>' +
+          '<div class="st-head"><b>' + loc + '</b><span class="st-sub">' + headRight + '</span></div>' +
           zonesHtml +
+          itemsHtml +
         '</div>';
       }).join('');
       document.getElementById('pickBody').innerHTML = html;
