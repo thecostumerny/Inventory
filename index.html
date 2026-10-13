@@ -197,6 +197,53 @@
       word-break: break-word;
     }
     .zone-btn:active { background: #e3eefb; border-color: var(--accent); }
+    .zone-btn.current { border-color: var(--accent); background: #e3eefb; }
+    .zone-btn.done { background: var(--ok-bg); border-color: #a5d6a7; color: var(--ok); }
+    .zone-btn.done::before { content: '✓ '; }
+
+    /* Scan screen: mark zone complete */
+    .zone-done-btn {
+      display: block;
+      width: 100%;
+      margin-top: 16px;
+      padding: 12px 0;
+      font-size: 1.05rem;
+      font-weight: bold;
+      background: var(--card);
+      color: var(--ok);
+      border: 2px solid var(--ok);
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .zone-done-btn.is-done { color: var(--muted); border-color: var(--border); }
+
+    /* Small "View status" link */
+    .status-link {
+      display: block;
+      margin: 14px auto 0;
+      padding: 6px 12px;
+      font-size: 0.9rem;
+      background: transparent;
+      border: none;
+      color: var(--accent);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    /* Status window */
+    .st-loc { padding: 12px; margin-bottom: 10px; background: var(--card); border-radius: 10px; }
+    .st-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .st-head b { font-size: 1.1rem; }
+    .st-sub { color: var(--muted); font-size: 0.9rem; }
+    .st-bar { height: 8px; margin: 8px 0 4px; background: var(--border); border-radius: 99px; overflow: hidden; }
+    .st-bar span { display: block; height: 100%; background: var(--ok); }
+    .st-zones { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .st-zone {
+      padding: 3px 8px; font-size: 0.85rem; border-radius: 6px;
+      background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+    }
+    .st-zone.done { background: var(--ok-bg); color: var(--ok); border-color: #a5d6a7; }
+    .st-zone.done::before { content: '✓ '; }
     #zoneEmpty { display: none; margin-top: 16px; text-align: center; color: var(--muted); }
 
     /* Scan */
@@ -506,7 +553,9 @@
           "title  title"
           "bar    bar"
           "info   qty"
-          "back   back";
+          "done   done"
+          "back   back"
+          "status status";
         column-gap: 24px;
         align-items: start;
       }
@@ -515,6 +564,8 @@
       #stepScan > .scan-info { grid-area: info; }
       #stepScan > #qtyPanel { grid-area: qty; margin-top: 12px; }
       #stepScan > .back-btn { grid-area: back; }
+      #stepScan > .zone-done-btn { grid-area: done; max-width: 560px; justify-self: center; }
+      #stepScan > .status-link { grid-area: status; }
     }
   </style>
 </head>
@@ -547,7 +598,8 @@
         <button class="loc-btn" id="btnMH" onclick="pickLocation('MH')">MH</button>
         <button class="loc-btn" id="btnBA" onclick="pickLocation('BA')">BA</button>
       </div>
-      <button class="logout-btn" onclick="logOut()">Log out</button>
+      <button class="status-link" onclick="openStatus()">View status</button>
+      <button class="logout-btn" style="margin-top:4px" onclick="logOut()">Log out</button>
     </div>
 
     <!-- Step 2: Initials -->
@@ -622,7 +674,9 @@
         <div class="key-hint">Enter saves 1, or type a different number first · Esc to skip</div>
       </div>
 
+      <button type="button" class="zone-done-btn" id="zoneDoneBtn" onclick="confirmZoneDone()" style="display:none"></button>
       <button class="back-btn" onclick="backFromScan()">Back</button>
+      <button class="status-link" onclick="openStatus()">View status</button>
     </div>
 
     <div id="status"></div>
@@ -658,6 +712,7 @@
       location: null,
       itemCount: 0,
       zones: null,   // null = this location has no zone step
+      done: new Set(), // zones marked complete (upper-case names)
       initials: '',
       zone: null
     };
@@ -708,6 +763,13 @@
       set('chipZone', state.zone);
       document.getElementById('summary').style.display = state.location ? 'flex' : 'none';
       document.body.classList.toggle('can-change', isStepActive('stepScan'));
+      const zd = document.getElementById('zoneDoneBtn');
+      if (zd) {
+        zd.style.display = state.zone ? 'block' : 'none';
+        const done = state.zone && isZoneDone(state.zone);
+        zd.textContent = done ? '✓ Zone ' + state.zone + ' is complete' : 'Mark zone ' + (state.zone || '') + ' complete';
+        zd.classList.toggle('is-done', !!done);
+      }
     }
 
     function isStepActive(id) {
@@ -887,6 +949,7 @@
               setStatus(info ? info.error : 'Unknown location', true);
             } else {
               state.zones = info.zones;
+              state.done = new Set((info.done || []).map(z => z.toUpperCase()));
               state.itemCount = info.itemCount;
             }
           }
@@ -1008,6 +1071,7 @@
       state.location = info.location;
       state.itemCount = info.itemCount;
       state.zones = info.zones;
+      state.done = new Set((info.done || []).map(z => z.toUpperCase()));
 
       // Start loading this location's barcodes now, in the background
       // (often already loading, see the bottom of this script)
@@ -1059,12 +1123,23 @@
 
     /* ---------- step 3: zone ---------- */
 
+    function isZoneDone(z) { return state.done.has(String(z).toUpperCase()); }
+
+    // Zone buttons: zones still to do first, completed ones after with a tick
+    function zoneButtonsHtml(list, current) {
+      const todo = list.filter(z => !isZoneDone(z));
+      const done = list.filter(z => isZoneDone(z));
+      return todo.concat(done).map(z =>
+        '<button type="button" class="zone-btn' + (isZoneDone(z) ? ' done' : '') +
+        (z === current ? ' current' : '') + '" data-zone="' + escapeHtml(z) + '">' +
+        escapeHtml(z) + '</button>'
+      ).join('');
+    }
+
     function renderZones() {
       const typed = document.getElementById('zoneInput').value.trim().toUpperCase();
       const list = (state.zones || []).filter(z => z.toUpperCase().includes(typed));
-      document.getElementById('zoneGrid').innerHTML = list.map(z =>
-        '<button class="zone-btn" data-zone="' + escapeHtml(z) + '">' + escapeHtml(z) + '</button>'
-      ).join('');
+      document.getElementById('zoneGrid').innerHTML = zoneButtonsHtml(list, null);
       document.getElementById('zoneEmpty').style.display = list.length ? 'none' : 'block';
     }
 
@@ -1453,10 +1528,10 @@
               anyFailed = true;
               failedSaves.push({ entry: e, error: r ? r.error : 'No response' });
               // Undo the on-device total for a count that didn't save
-              if (e.type !== 'link' && items.location === e.loc) {
+              if (e.type !== 'link' && e.type !== 'zone' && items.location === e.loc) {
                 items.counts[e.index] = String(Math.max((Number(items.counts[e.index]) || 0) - e.qty, 0));
               }
-            } else if (e.type !== 'link' && items.location === e.loc &&
+            } else if (e.type !== 'link' && e.type !== 'zone' && items.location === e.loc &&
                        !saveQueue.some(q => q.type !== 'link' && q.loc === e.loc && q.index === e.index)) {
               // Use the sheet's total (includes other devices' counts)
               items.counts[e.index] = String(r.total);
@@ -1497,7 +1572,8 @@
             failedSaves.map(f =>
               '<li>' + escapeHtml(f.entry.code) +
               (f.entry.type === 'link' ? ' · SKU ' + escapeHtml(f.entry.sku) + ' (barcode update)'
-                                       : ' · qty ' + f.entry.qty) +
+               : f.entry.type === 'zone' ? ' (zone complete)'
+               : ' · qty ' + f.entry.qty) +
               (f.entry.zone ? ' · zone ' + escapeHtml(f.entry.zone) : '') +
               ' — ' + escapeHtml(f.error) + '</li>').join('') +
             '</ul>';
@@ -1700,6 +1776,7 @@
       document.getElementById('pickMsg').textContent = '';
       pickCancelable = cancelable !== false;
       document.getElementById('pickCancel').style.display = pickCancelable ? 'block' : 'none';
+      document.getElementById('pickCancel').textContent = 'Cancel';
       pickModal.classList.add('open');
     }
 
@@ -1744,6 +1821,7 @@
       state.location = loc;
       state.itemCount = info.itemCount;
       state.zones = info.zones;
+      state.done = new Set((info.done || []).map(z => z.toUpperCase()));
       state.zone = null;
       clearCurrent();
       document.getElementById('scanResult').innerHTML = '';
@@ -1795,9 +1873,7 @@
         const typed = input.value.trim().toUpperCase();
         const list = state.zones.filter(z => z.toUpperCase().includes(typed));
         document.getElementById('pickZoneGrid').innerHTML = list.length
-          ? list.map(z => '<button type="button" class="zone-btn" data-zone="' + escapeHtml(z) + '"' +
-              (z === state.zone ? ' style="border-color:var(--accent);background:#e3eefb"' : '') +
-              '>' + escapeHtml(z) + '</button>').join('')
+          ? zoneButtonsHtml(list, state.zone)
           : '<div style="grid-column:1/-1;text-align:center;color:var(--muted)">No matching zones</div>';
       };
       input.addEventListener('input', render);
@@ -1826,6 +1902,88 @@
       const zoneBtn = e.target.closest('.zone-btn');
       if (zoneBtn) changeZone(zoneBtn.dataset.zone);
     });
+
+    /* ---------- zone complete ---------- */
+
+    function confirmZoneDone() {
+      if (!state.zone || pickOpen()) return;
+      if (isZoneDone(state.zone)) { openZonePick(false); return; } // already done: pick the next one
+      const zone = state.zone;
+      openPick('Mark zone ' + zone + ' complete?',
+        '<p style="text-align:center;margin:0 0 14px;color:var(--muted)">Only do this once every item in the zone has been counted.</p>' +
+        '<button type="button" class="save-btn" id="zoneDoneYes" style="width:100%;padding:16px 0;font-size:1.15rem;font-weight:bold;border-radius:10px;cursor:pointer">Mark complete</button>');
+      document.getElementById('zoneDoneYes').addEventListener('click', () => markZoneDone(zone));
+    }
+
+    function markZoneDone(zone) {
+      state.done.add(zone.toUpperCase());
+      if (appData && appData[state.location]) {
+        const d = appData[state.location].done || (appData[state.location].done = []);
+        if (d.indexOf(zone) === -1) d.push(zone);
+      }
+      queueEntry({ type: 'zone', loc: state.location, zone: zone, initials: state.initials });
+      closePick();
+      updateSummary();
+      setSaveStatus('✓ Zone ' + zone + ' marked complete', 'ok');
+
+      // Straight on to the next zone
+      const left = state.zones.filter(z => !isZoneDone(z)).length;
+      openZonePick(false);
+      document.getElementById('pickTitle').textContent = left
+        ? 'Zone ' + zone + ' complete. Choose the next zone'
+        : 'All zones in ' + state.location + ' are complete';
+    }
+
+    /* ---------- status ---------- */
+
+    function openStatus() {
+      if (pickOpen()) return;
+      openPick('Status', '<div style="text-align:center;color:var(--muted);padding:20px 0">Loading…</div>');
+      document.getElementById('pickCancel').textContent = 'Close';
+      callServer('getStatus')
+        .then(st => { if (pickOpen()) renderStatus(st); })
+        .catch(err => {
+          if (isLoginError(err)) { closePick(); loginExpired(); return; }
+          pickMsg('Could not load the status. ' + err.message);
+        });
+    }
+
+    function renderStatus(st) {
+      // Keep this device's zone list in step with what everyone has marked
+      Object.keys(st).forEach(loc => {
+        if (appData && appData[loc] && st[loc].ready) appData[loc].done = st[loc].done || [];
+      });
+      if (state.location && st[state.location] && st[state.location].ready) {
+        (st[state.location].done || []).forEach(z => state.done.add(z.toUpperCase()));
+        updateSummary();
+      }
+
+      const html = ['FC', 'MH', 'BA'].map(loc => {
+        const s = st[loc];
+        if (!s || !s.ready) {
+          return '<div class="st-loc"><div class="st-head"><b>' + loc + '</b><span class="st-sub">Not started</span></div></div>';
+        }
+        const pct = s.items ? Math.round(s.counted / s.items * 100) : 0;
+        let zonesHtml = '';
+        if (s.zones) {
+          const doneSet = new Set((s.done || []).map(z => z.toUpperCase()));
+          const doneN = s.zones.filter(z => doneSet.has(z.toUpperCase())).length;
+          zonesHtml =
+            '<div class="st-sub" style="margin-top:8px">Zones: <b>' + doneN + ' of ' + s.zones.length + '</b> complete</div>' +
+            '<div class="st-zones">' + s.zones.map(z =>
+              '<span class="st-zone' + (doneSet.has(z.toUpperCase()) ? ' done' : '') + '">' + escapeHtml(z) + '</span>'
+            ).join('') + '</div>';
+        }
+        return '<div class="st-loc">' +
+          '<div class="st-head"><b>' + loc + '</b><span class="st-sub">' + pct + '% of items counted</span></div>' +
+          '<div class="st-bar"><span style="width:' + pct + '%"></span></div>' +
+          '<div class="st-sub">' + s.counted.toLocaleString() + ' of ' + s.items.toLocaleString() +
+            ' items · ' + s.units.toLocaleString() + ' units</div>' +
+          zonesHtml +
+        '</div>';
+      }).join('');
+      document.getElementById('pickBody').innerHTML = html;
+    }
 
     async function openCamera() {
       if (!isStepActive('stepScan')) return;
