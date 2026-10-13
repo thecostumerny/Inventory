@@ -284,16 +284,29 @@
     }
 
     /* Phone camera scanning */
+    /* Barcode box with the camera icon inside it, at the right edge */
+    .scan-field { position: relative; flex: 1; min-width: 0; display: flex; }
+    .scan-field input { width: 100%; }
+    body.touch .scan-field input { padding-right: 54px; }
     .cam-btn {
       display: none; /* shown on touch devices */
-      padding: 0 14px;
-      background: var(--accent);
+      position: absolute;
+      top: 50%;
+      right: 6px;
+      transform: translateY(-50%);
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      background: transparent;
       border: none;
-      border-radius: 10px;
+      border-radius: 8px;
       cursor: pointer;
+      align-items: center;
+      justify-content: center;
     }
-    .cam-btn svg { width: 28px; height: 28px; fill: #fff; display: block; }
-    body.touch .cam-btn { display: block; }
+    .cam-btn:active { background: #e3eefb; }
+    .cam-btn svg { width: 28px; height: 28px; fill: var(--accent); display: block; }
+    body.touch .cam-btn { display: flex; }
     #camOverlay {
       display: none;
       position: fixed;
@@ -461,13 +474,15 @@
     <div class="step" id="stepScan">
       <h2>Scan a barcode or type a SKU</h2>
       <div class="input-row">
-        <input type="text" id="scanInput" autocomplete="off" autocorrect="off"
-               autocapitalize="off" spellcheck="false" placeholder="Barcode or SKU"
-               onkeydown="if(event.key==='Enter'){event.preventDefault();submitScan();}">
+        <div class="scan-field">
+          <input type="text" id="scanInput" autocomplete="off" autocorrect="off"
+                 autocapitalize="off" spellcheck="false" placeholder="Barcode or SKU"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();submitScan();}">
+          <button class="cam-btn" id="camBtn" onclick="openCamera()" aria-label="Scan with camera" title="Scan with camera">
+            <svg viewBox="0 0 24 24"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+          </button>
+        </div>
         <button class="go-btn" onclick="submitScan()">Enter</button>
-        <button class="cam-btn" id="camBtn" onclick="openCamera()" aria-label="Scan with camera" title="Scan with camera">
-          <svg viewBox="0 0 24 24"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
-        </button>
       </div>
       <div class="scan-info">
         <div id="itemsStatus"></div>
@@ -1381,6 +1396,8 @@
     let scanning = false;    // scan loop running
     let cameraMode = false;  // keep reopening the camera after each item
     let liveBlocked = false; // this browser/frame won't allow the live camera
+    let idleTimer = null;    // turns the camera off after a while unused
+    const CAMERA_IDLE_MS = 3 * 60 * 1000;
 
     const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
     if (isTouch) document.body.classList.add('touch');
@@ -1419,7 +1436,25 @@
       // Live camera already failed here: go straight to the phone's camera app
       if (liveBlocked) { document.getElementById('camFile').click(); return; }
       document.getElementById('camOverlay').classList.add('open');
-      if (stream) return;
+      clearTimeout(idleTimer);
+
+      // Camera still running from the last scan: just start reading again.
+      // (Restarting it would make the phone ask/announce camera access each time.)
+      if (stream && stream.getVideoTracks().some(t => t.readyState === 'live')) {
+        if (scanning) return;
+        try { await camVideo.play(); } catch (e) {}
+        try {
+          const detector = await getDetector();
+          if (!camOpen()) return;
+          setCamMsg('Hold the barcode inside the box');
+          scanning = true;
+          scanLoop(detector);
+        } catch (e) {
+          setCamMsg('Could not load the scanner. Check the connection and try again.');
+        }
+        return;
+      }
+      stopCamera();
       setCamMsg('Starting camera…');
 
       const detectorReady = getDetector(); // load the reader while the camera starts
@@ -1509,11 +1544,30 @@
       camVideo.srcObject = null;
     }
 
+    // keepMode = true: hide the camera after a scan but keep it running for the
+    // next item (no new permission prompt). false: turn it off completely.
     function closeCamera(keepMode) {
-      if (!keepMode) cameraMode = false;
       document.getElementById('camOverlay').classList.remove('open');
-      stopCamera();
+      scanning = false;
+      clearTimeout(idleTimer);
+      if (keepMode && stream) {
+        // Turn it off if it isn't used again for a while, to save battery
+        idleTimer = setTimeout(() => { cameraMode = false; stopCamera(); }, CAMERA_IDLE_MS);
+      } else {
+        cameraMode = false;
+        stopCamera();
+      }
     }
+
+    // Turn the camera off when the app goes to the background
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && stream) {
+        const wasOpen = camOpen();
+        clearTimeout(idleTimer);
+        stopCamera();
+        if (wasOpen) closeCamera(false);
+      }
+    });
 
     // After Save / Skip, go straight back to the camera for the next item
     function reopenCameraIfUsing() {
@@ -1521,6 +1575,7 @@
     }
 
     document.getElementById('camClose').addEventListener('click', () => closeCamera(false));
+    document.getElementById('camBtn').addEventListener('mousedown', e => e.preventDefault());
 
     // Backup: read the barcode from a photo
     document.getElementById('camFile').addEventListener('change', async e => {
