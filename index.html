@@ -1062,7 +1062,7 @@
       const [sku, desc, price, expected] = items.rows[idx];
       const counted = items.counts[idx] === '' || items.counts[idx] == null ? '0' : items.counts[idx];
       const note = matchCount > 1
-        ? '<div class="note">This barcode appears on ' + matchCount + ' rows. The count goes on the first.</div>'
+        ? '<div class="note">This barcode matches ' + matchCount + ' items. The count goes on the first one.</div>'
         : '';
       box.innerHTML =
         '<div class="result found">' +
@@ -1094,7 +1094,7 @@
       box.innerHTML =
         '<div class="result notfound">' +
           '<h3>Barcode Not Found</h3>' +
-          '<div>Set item aside for review, or find it by SKU:</div>' +
+          '<div class="sku-fix-prompt">Enter the SKU to find the item:</div>' +
           '<div class="sku-fix">' +
             '<input type="text" class="sku-fix-input" inputmode="numeric" autocomplete="off" placeholder="SKU">' +
             '<button class="sku-fix-go">Find</button>' +
@@ -1129,8 +1129,10 @@
       if (!sku) { msg.textContent = 'Enter a SKU.'; return; }
       const matches = items.skuIndex && items.skuIndex.get(normCode(sku));
       if (!matches) {
+        // Neither the barcode nor the SKU was found
         playWarning();
-        msg.textContent = 'SKU ' + sku + ' is not in ' + state.location + '.';
+        msg.textContent = 'SKU not found. Set item aside for review.';
+        wrap.dataset.skuFailed = '1';
         input.select();
         return;
       }
@@ -1157,8 +1159,10 @@
     }
 
     function skipNotFound() {
+      const wrap = document.querySelector('#scanResult .sku-fix');
+      const failed = wrap && wrap.dataset.skuFailed === '1';
       document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus('Set aside for review', 'warn');
+      setSaveStatus(failed ? 'Set aside for review' : 'Skipped', 'warn');
       reopenCameraIfUsing();
     }
 
@@ -1367,7 +1371,7 @@
             '</ul>';
         }
         if (netError && n) {
-          html += '<div><b>⚠ Can\'t reach the sheet.</b> ' + plural(n, 'count') +
+          html += '<div><b>⚠ Can\'t connect right now.</b> ' + plural(n, 'count') +
                   ' waiting — retrying automatically. Don\'t close this page.</div>' +
                   '<div style="margin-top:8px;"><button id="retryNowBtn">Retry now</button>';
         } else {
