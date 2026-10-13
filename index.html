@@ -772,6 +772,7 @@
     }
 
     function logOut() {
+      closeCamera(false, true);
       password = '';
       try { localStorage.removeItem('inv_pass'); } catch (e) {}
       appData = null;
@@ -1517,7 +1518,7 @@
     let scanning = false;    // scan loop running
     let cameraMode = false;  // keep reopening the camera after each item
     let idleTimer = null;    // turns the camera off after a while unused
-    const CAMERA_IDLE_MS = 3 * 60 * 1000;
+    const CAMERA_IDLE_MS = 10 * 60 * 1000; // off after 10 minutes unused
 
     const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
     if (isTouch) document.body.classList.add('touch');
@@ -1725,16 +1726,24 @@
 
     // keepMode = true: hide the camera after a scan but keep it running for the
     // next item (no new permission prompt). false: turn it off completely.
-    function closeCamera(keepMode) {
+    /*
+     * Hides the camera. The camera itself keeps running in the background
+     * (even after Close or leaving the scan screen), because every restart
+     * makes the phone ask for / announce camera access again. It turns off
+     * after 10 minutes unused, when the app goes to the background, or on
+     * log out.
+     * keepMode = true: reopen the camera automatically after the next Save/Skip.
+     * stopNow = true: turn the camera off right away.
+     */
+    function closeCamera(keepMode, stopNow) {
       exitCamSheet();
       document.getElementById('camOverlay').classList.remove('open');
       scanning = false;
+      if (!keepMode) cameraMode = false;
       clearTimeout(idleTimer);
-      if (keepMode && stream) {
-        // Turn it off if it isn't used again for a while, to save battery
+      if (stream && !stopNow) {
         idleTimer = setTimeout(() => { cameraMode = false; stopCamera(); }, CAMERA_IDLE_MS);
       } else {
-        cameraMode = false;
         stopCamera();
       }
     }
@@ -1745,7 +1754,7 @@
         const wasOpen = camOpen();
         clearTimeout(idleTimer);
         stopCamera();
-        if (wasOpen) closeCamera(false);
+        if (wasOpen) closeCamera(false, true);
       }
     });
 
