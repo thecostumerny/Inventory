@@ -285,9 +285,10 @@
       font-size: 1rem;
       line-height: 1.4;
     }
-    .item-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .item-desc { white-space: normal; overflow-wrap: anywhere; }
     .item-line .nowrap { white-space: nowrap; }
-    .item-line:not(.counts) { gap: 0.3em; } /* SKU Description Price: a single space apart */
+    /* SKU Description Price: one centered line that wraps when it's long */
+    .item-line:not(.counts) { display: block; text-align: center; }
     .item-line.counts { margin-top: 4px; gap: 24px; color: var(--muted); }
     .item-line.counts b { color: var(--text); margin-left: 4px; }
     .result td:first-child { color: var(--muted); padding-right: 12px; white-space: nowrap; }
@@ -1464,8 +1465,8 @@
       box.innerHTML =
         '<div class="result found">' +
           '<div class="item-line">' +
-            '<span class="nowrap">' + escapeHtml(sku) + '</span>' +
-            '<span class="item-desc">' + escapeHtml(desc) + '</span>' +
+            '<span class="nowrap">' + escapeHtml(sku) + '</span> ' +
+            '<span class="item-desc">' + escapeHtml(desc) + '</span> ' +
             '<span class="nowrap">' + escapeHtml(price) + '</span>' +
           '</div>' +
           '<div class="item-line counts">' +
