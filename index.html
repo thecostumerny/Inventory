@@ -639,7 +639,8 @@
       body.on-scan #stepScan .numpad button.fn { font-size: clamp(0.8rem, 1.2vw, 1rem); }
       body.on-scan #stepScan .key-hint { font-size: 0.8rem; }
       /* windows shown over the app stay above the side panel */
-      #pickModal, #camOverlay { z-index: 70; }
+      #camOverlay { z-index: 70; }
+      #pickModal { z-index: 80; }
     }
   </style>
 </head>
@@ -1188,6 +1189,15 @@
             skuIndex.get(key).push(i);
           });
           items.skuIndex = skuIndex;
+          // Variants of the same product (same title)
+          const byTitle = new Map();
+          d.rows.forEach((r, i) => {
+            const t = String(r[4] || '').toUpperCase();
+            if (!t) return;
+            if (!byTitle.has(t)) byTitle.set(t, []);
+            byTitle.get(t).push(i);
+          });
+          items.byTitle = byTitle;
           items.counts = d.counts;
           items.index = index;
           items.loading = false;
@@ -1210,7 +1220,7 @@
     function updateItemsStatus() {
       const el = document.getElementById('itemsStatus');
       if (items.loading) el.textContent = 'Loading items…';
-      else if (items.error) el.textContent = 'Could not load items. Go back and pick the location again.';
+      else if (items.error) el.textContent = 'Could not load items (' + items.error + '). Go back and pick the location again.';
       else el.textContent = '';
     }
 
@@ -1640,9 +1650,53 @@
       try { localStorage.setItem(QUEUE_KEY, JSON.stringify(saveQueue)); } catch (e) {}
     }
 
+    /*
+     * Variant check: if the new total for this variant is above what's
+     * expected for it, but no more than 3 above what's expected for ALL
+     * variants of the product combined, items of another variant may have
+     * been counted as this one. Ask the counter to confirm first.
+     * e.g. expected 2 Medium, 3 Large, 1 Extra Large (6 total):
+     *      3–9 Medium asks to confirm, 10 or more doesn't.
+     */
+    function variantCheck(item) {
+      const row = items.rows[item.index];
+      if (!row || !items.byTitle) return null;
+      const family = items.byTitle.get(String(row[4] || '').toUpperCase()) || [];
+      if (family.length < 2) return null;
+      const exp = i => Number(String(items.rows[i][3]).replace(/,/g, '')) || 0;
+      const newTotal = (Number(items.counts[item.index]) || 0) + Number(item.qty);
+      const familyExpected = family.reduce((sum, i) => sum + exp(i), 0);
+      if (newTotal <= exp(item.index) || newTotal > familyExpected + 3) return null;
+      return family.filter(i => exp(i) > 0).map(i => ({
+        qty: exp(i),
+        label: items.rows[i][5] || items.rows[i][1],
+        current: i === item.index
+      }));
+    }
+
+    function showVariantCheck(list) {
+      playWarning();
+      openPick('Please confirm that all products are the same variant',
+        '<div style="text-align:center;margin-bottom:6px;color:var(--muted)">Expected:</div>' +
+        '<div style="text-align:center;font-size:1.15rem;line-height:1.6;margin-bottom:16px">' +
+          list.map(v => (v.current ? '<b>' : '') + v.qty + ' ' + escapeHtml(v.label) + (v.current ? '</b>' : '')).join('<br>') +
+        '</div>' +
+        '<button type="button" class="save-btn" id="variantSaveAnyway" style="width:100%;padding:16px 0;font-size:1.15rem;font-weight:bold;border-radius:10px;cursor:pointer">They\'re all the same. Save</button>');
+      document.getElementById('pickCancel').textContent = 'Go back';
+      document.getElementById('variantSaveAnyway').addEventListener('click', () => {
+        if (current) current.variantOk = true;
+        closePick();
+        saveCurrent();
+      });
+    }
+
     function saveCurrent() {
       if (!current) return;
       if (current.qty === '') { setSaveStatus('Enter a quantity first', 'error'); return; }
+      if (!current.variantOk) {
+        const list = variantCheck(current);
+        if (list) { showVariantCheck(list); return; }
+      }
 
       const item = current;
       const qty = Number(item.qty);
@@ -1826,7 +1880,14 @@
 
     document.addEventListener('keydown', e => {
       if (!isStepActive('stepScan')) return;
-      if (pickOpen()) { if (e.key === 'Escape' && pickCancelable) closePick(); return; }
+      if (pickOpen()) {
+        if (e.key === 'Escape' && pickCancelable) closePick();
+        if (e.key === 'Enter' && document.getElementById('variantSaveAnyway')) {
+          e.preventDefault();
+          document.getElementById('variantSaveAnyway').click();
+        }
+        return;
+      }
       if (isEditable(e.target)) return; // typing in a box handles itself
       if (e.ctrlKey || e.altKey || e.metaKey) return;
       const now = performance.now();
