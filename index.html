@@ -238,6 +238,22 @@
     .st-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
     .st-head b { font-size: 1.1rem; }
     .st-sub { color: var(--muted); font-size: 0.9rem; }
+    .st-pct { margin-top: 6px; font-size: 1rem; }
+
+    /* Last 5 items counted on this device */
+    .recent { max-width: 560px; margin: 16px auto 0; }
+    .recent:empty { display: none; }
+    .recent h4 { margin: 0 0 6px; font-size: 0.85rem; font-weight: normal; color: var(--muted); text-align: center; text-transform: uppercase; letter-spacing: 0.04em; }
+    .recent-row {
+      display: flex; gap: 10px; align-items: baseline;
+      padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 0.92rem;
+    }
+    .recent-row:last-child { border-bottom: none; }
+    .recent-qty { flex: 0 0 auto; min-width: 2.6em; font-weight: bold; color: var(--ok); }
+    .recent-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .recent-zone { flex: 0 0 auto; color: var(--muted); font-size: 0.85rem; }
+    .recent-list { background: var(--card); border-radius: 10px; }
+    .st-pct b { font-size: 1.5rem; color: var(--ok); }
     .st-bar { height: 8px; margin: 8px 0 4px; background: var(--border); border-radius: 99px; overflow: hidden; }
     .st-bar span { display: block; height: 100%; background: var(--ok); }
     .st-zones { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -364,6 +380,12 @@
       border-radius: 10px;
       cursor: pointer;
     }
+    .quick-btn {
+      display: block; width: 100%; margin-top: 10px; padding: 12px 0;
+      font-size: 1.05rem; font-weight: bold; color: var(--ok);
+      background: var(--ok-bg); border: 2px solid var(--ok); border-radius: 10px; cursor: pointer;
+    }
+    .note-btn { flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--text); }
     .skip-btn { flex: 1; background: transparent; border: 1px solid var(--muted); color: var(--text); }
     .save-btn { flex: 2; background: var(--ok); border: none; color: #fff; }
     .save-btn:disabled { opacity: 0.4; cursor: default; }
@@ -497,12 +519,18 @@
       border-radius: 12px;
       overflow: hidden;
       background: #000;
+      container-type: size; /* lets the aim box size itself to the view */
     }
     #camVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
     /* Aim box: barcodes are read from this middle band */
+    /* Aim box: nearly square (a little wider than tall), centered */
     .cam-guide {
       position: absolute;
-      left: 5%; right: 5%; top: 30%; bottom: 30%;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 80%;
+      width: min(84cqw, 96cqh);
+      aspect-ratio: 6 / 5;
       border: 3px solid rgba(255, 255, 255, 0.9);
       border-radius: 10px;
       box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
@@ -587,10 +615,16 @@
      * down the right side (about 20% of the screen); everything else uses the
      * other 80%. The panel shows a hint until an item is scanned.
      */
-    @media (min-width: 820px) and (orientation: landscape) {
+    :root { --panel-w: max(20vw, 240px); }
+    @media (orientation: landscape) and (max-height: 540px) {
+      :root { --panel-w: 42vw; }
+    }
+
+    @media (min-width: 820px) and (orientation: landscape),
+           (orientation: landscape) and (max-height: 540px) {
       body.on-scan .wrap {
         max-width: none;
-        margin-right: max(20vw, 240px);
+        margin-right: var(--panel-w);
         padding-left: 24px;
         padding-right: 24px;
       }
@@ -604,7 +638,7 @@
         top: 0;
         right: 0;
         bottom: 0;
-        width: max(20vw, 240px);
+        width: var(--panel-w);
         margin: 0;
         border-radius: 0;
         border-left: 1px solid var(--border);
@@ -642,6 +676,49 @@
       /* windows shown over the app stay above the side panel */
       #camOverlay { z-index: 70; }
       #pickModal { z-index: 80; }
+    }
+
+    /*
+     * Phones on their side: short screen, so everything is compact.
+     * Left: pills, SKU box, item, buttons (scrolls if needed).
+     * Right (about 40%): quantity and Save on one row, quick count,
+     * number pad, Note / Skip, all fitting the height without scrolling.
+     */
+    @media (orientation: landscape) and (max-height: 540px) {
+      body.on-scan .wrap { padding: 8px 16px 24px max(16px, env(safe-area-inset-left)); }
+      body.on-scan #syncBar { margin: -8px -16px 8px; }
+      body.on-scan #summary { margin: 0 0 4px; }
+      body.on-scan #stepScan { margin-top: 4px; }
+      body.on-scan #stepScan > h2 { display: none; }
+      body.on-scan input[type=text] { padding: 9px 12px; font-size: 1.1rem; }
+      body.on-scan #scanResult { margin-top: 2px; }
+      body.on-scan .zone-done-btn { margin-top: 10px; padding: 9px 0; font-size: 0.95rem; }
+      body.on-scan .back-btn { margin-top: 10px; padding: 7px 16px; }
+      body.on-scan .status-link { margin-top: 4px; }
+      body.on-scan .recent { margin-top: 10px; }
+
+      body.on-scan #stepScan #qtyPanel {
+        justify-content: flex-start;
+        padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 8px 10px;
+      }
+      body.on-scan #stepScan .qty-label,
+      body.on-scan #stepScan .key-hint { display: none; }
+      body.on-scan #stepScan .qty-row { flex-direction: row; }
+      body.on-scan #stepScan .qty-display { font-size: 1.6rem; padding: 2px 6px; min-height: 0; }
+      body.on-scan #stepScan .qty-row .save-btn { padding: 0 18px; font-size: 1.1rem; }
+      body.on-scan #stepScan .quick-btn { margin-top: 6px; padding: 7px 0; font-size: 0.95rem; }
+      body.on-scan #stepScan .numpad { gap: 5px; margin-top: 6px; }
+      body.on-scan #stepScan .numpad button { padding: clamp(5px, 2.2vh, 11px) 0; font-size: 1.2rem; }
+      body.on-scan #stepScan .numpad button.fn { font-size: 0.85rem; }
+      body.on-scan #stepScan .qty-actions { margin-top: 6px; gap: 6px; }
+      body.on-scan #stepScan .qty-actions button { padding: 8px 0; font-size: 1rem; }
+
+      /* camera: use the height, aim box stays near-square */
+      #camOverlay { padding: 8px; }
+      #camView { aspect-ratio: auto; height: 72vh; max-height: none; }
+      #camMsg { margin: 6px 0; }
+      .cam-actions > * { padding: 10px 0; }
+      .pick-box { margin-top: 2vh; padding: 12px; }
     }
   </style>
 </head>
@@ -743,6 +820,7 @@
           <div class="qty-display empty" id="qtyDisplay">0</div>
           <button tabindex="-1" class="save-btn" id="saveBtn" disabled>Save</button>
         </div>
+        <button type="button" tabindex="-1" class="quick-btn" id="quickBtn" style="display:none"></button>
         <div class="numpad" id="numpad">
           <button tabindex="-1" data-k="1">1</button>
           <button tabindex="-1" data-k="2">2</button>
@@ -758,6 +836,7 @@
           <button tabindex="-1" data-k="back" class="fn">&#9003;</button>
         </div>
         <div class="qty-actions">
+          <button tabindex="-1" class="note-btn" id="noteBtn">Note</button>
           <button tabindex="-1" class="skip-btn" id="skipBtn">Skip</button>
         </div>
         <div class="key-hint">Enter saves 1, or type a different number first · Esc to skip</div>
@@ -766,6 +845,7 @@
       <button type="button" class="zone-done-btn" id="zoneDoneBtn" onclick="confirmZoneDone()" style="display:none"></button>
       <button class="back-btn" onclick="backFromScan()">Back</button>
       <button class="status-link admin-only" onclick="openStatus()">View status</button>
+      <div class="recent" id="recentList"></div>
     </div>
 
     <div id="status"></div>
@@ -819,7 +899,7 @@
       updateSummary();
       if (id === 'stepInitials') focusLater('initialsInput');
       if (id === 'stepLogin') { pinValue = ''; renderPin(); }
-      if (id === 'stepZone') { document.getElementById('zoneInput').value = ''; renderZones(); focusLater('zoneInput'); }
+      if (id === 'stepZone') { document.getElementById('zoneInput').value = ''; renderZones(); focusLater('zoneInput'); refreshZoneDone(); }
       // No auto-focus on the scan box: scans are captured anywhere on the
       // screen, and focusing would pop up the phone keyboard.
       if (id === 'stepScan') { updateItemsStatus(); }
@@ -853,6 +933,7 @@
       document.getElementById('summary').style.display = state.location ? 'flex' : 'none';
       document.body.classList.toggle('can-change', isStepActive('stepScan'));
       document.body.classList.toggle('on-scan', isStepActive('stepScan'));
+      if (isStepActive('stepScan')) renderRecent(); // follows location / initials changes
       const zd = document.getElementById('zoneDoneBtn');
       if (zd) {
         zd.style.display = state.zone ? 'block' : 'none';
@@ -1357,6 +1438,8 @@
       showStep('stepScan');
       updateSummary();
       saveSession();
+      renderRecent();
+      refreshZoneDone();
     }
 
     /*
@@ -1440,8 +1523,19 @@
       const matches = items.index.get(key) || (items.skuIndex && items.skuIndex.get(key));
       const box = document.getElementById('scanResult');
 
-      // A new scan while an item still needs a quantity skips that item
-      if (current) setSaveStatus('Previous item was not saved', 'warn');
+      // A new scan while an item is still open saves that item first,
+      // with the quantity entered (1 if nothing was typed)
+      if (current) {
+        if (current.qty === '' || current.qty === '0') { current.qty = '1'; current.fresh = false; }
+        const list = !current.variantOk && variantCheck(current);
+        if (list) {
+          // Confirm the variant first, then carry on with this scan
+          pendingAfterCheck = code;
+          showVariantCheck(list);
+          return;
+        }
+        saveCurrent({ fromScan: true });
+      }
 
       if (!matches) {
         playWarning();
@@ -1480,6 +1574,7 @@
       current = { index: idx, code: code, sku: items.rows[idx][0], qty: '1', fresh: true };
       document.getElementById('qtyPanel').style.display = 'block';
       renderQty();
+      renderQuick();
     }
 
     /*
@@ -1501,6 +1596,8 @@
           '<button class="sku-fix-skip">Skip</button>' +
         '</div>';
       box.querySelector('.sku-fix').dataset.code = code;
+      // On a computer, put the cursor straight in the SKU box
+      if (!isTouch) setTimeout(() => { const i = box.querySelector('.sku-fix-input'); if (i) i.focus(); }, 30);
     }
 
     {
@@ -1509,11 +1606,32 @@
         if (e.target.closest('.sku-fix-go')) findBySku();
         if (e.target.closest('.sku-fix-skip')) skipNotFound();
       });
+      // Typing speed in the SKU box: a scanner types far faster than a person,
+      // so a fast burst ending in Enter is a new barcode, not a SKU.
+      let skuBurst = null;
       res.addEventListener('keydown', e => {
-        if (e.target.classList.contains('sku-fix-input') && e.key === 'Enter') {
+        if (!e.target.classList.contains('sku-fix-input')) return;
+        const now = performance.now();
+        if (e.key === 'Enter') {
           e.preventDefault();
-          findBySku();
+          const b = skuBurst;
+          skuBurst = null;
+          const val = e.target.value.trim();
+          const isScan = b && b.n >= 4 && now - b.last < 150 && (b.last - b.start) / (b.n - 1) < 40;
+          if (isScan && val) {
+            e.target.value = '';
+            e.target.blur();
+            document.getElementById('scanResult').innerHTML = '';
+            handleCode(val);
+          } else {
+            findBySku();
+          }
+          return;
         }
+        if (e.key.length !== 1) return;
+        if (!skuBurst || now - skuBurst.last > 100) skuBurst = { start: now, last: now, n: 0 };
+        skuBurst.n++;
+        skuBurst.last = now;
       });
     }
 
@@ -1572,6 +1690,31 @@
 
     /* ---------- quantity entry ---------- */
 
+    // Quick count: one tap when the shelf matches what's expected.
+    // Saves what's still expected here (expected minus counted so far).
+    function remainingExpected(idx) {
+      const exp = Number(String(items.rows[idx][3]).replace(/,/g, '')) || 0;
+      return exp - (Number(items.counts[idx]) || 0);
+    }
+
+    function renderQuick() {
+      const btn = document.getElementById('quickBtn');
+      const left = current ? remainingExpected(current.index) : 0;
+      btn.style.display = left > 0 ? 'block' : 'none';
+      btn.textContent = '✓ Count matches expected: ' + left;
+    }
+
+    function quickCount() {
+      if (!current) return;
+      const left = remainingExpected(current.index);
+      if (left <= 0) return;
+      current.qty = String(left);
+      current.fresh = false;
+      current.variantOk = true; // matches expected, so no variant check needed
+      renderQty();
+      saveCurrent();
+    }
+
     const QTY_MAX_DIGITS = 6;
 
     function renderQty() {
@@ -1605,7 +1748,11 @@
     });
     ['saveBtn', 'skipBtn'].forEach(id =>
       document.getElementById(id).addEventListener('mousedown', e => e.preventDefault()));
-    document.getElementById('saveBtn').addEventListener('click', saveCurrent);
+    document.getElementById('saveBtn').addEventListener('click', () => saveCurrent());
+    ['quickBtn', 'noteBtn'].forEach(id =>
+      document.getElementById(id).addEventListener('mousedown', e => e.preventDefault()));
+    document.getElementById('quickBtn').addEventListener('click', quickCount);
+    document.getElementById('noteBtn').addEventListener('click', openNote);
     document.getElementById('skipBtn').addEventListener('click', () => {
       clearCurrent();
       document.getElementById('scanResult').innerHTML = '';
@@ -1675,6 +1822,8 @@
       }));
     }
 
+    let pendingAfterCheck = null; // scan waiting behind a variant check
+
     function showVariantCheck(list) {
       playWarning();
       openPick('Please confirm that all products are the same variant',
@@ -1685,13 +1834,16 @@
         '<button type="button" class="save-btn" id="variantSaveAnyway" style="width:100%;padding:16px 0;font-size:1.15rem;font-weight:bold;border-radius:10px;cursor:pointer">They\'re all the same. Save</button>');
       document.getElementById('pickCancel').textContent = 'Go back';
       document.getElementById('variantSaveAnyway').addEventListener('click', () => {
+        const next = pendingAfterCheck;
         if (current) current.variantOk = true;
         closePick();
-        saveCurrent();
+        saveCurrent({ fromScan: !!next });
+        if (next) lookup(next); // the scan that was waiting
       });
     }
 
-    function saveCurrent() {
+    function saveCurrent(opts) {
+      opts = opts || {};
       if (!current) return;
       if (current.qty === '') { setSaveStatus('Enter a quantity first', 'error'); return; }
       if (!current.variantOk) {
@@ -1725,9 +1877,10 @@
       document.getElementById('scanResult').innerHTML = '';
       setSaveStatus('✓ Counted ' + qty + ' · Total ' + items.counts[item.index], 'ok');
 
+      addRecent(item.index, qty);
       renderSyncBar();
       sendQueue();
-      reopenCameraIfUsing();
+      if (!opts.fromScan) reopenCameraIfUsing();
     }
 
     // Adds any other write (e.g. a barcode link) to the same background queue
@@ -1763,11 +1916,11 @@
               anyFailed = true;
               failedSaves.push({ entry: e, error: r ? r.error : 'No response' });
               // Undo the on-device total for a count that didn't save
-              if (e.type !== 'link' && e.type !== 'zone' && items.location === e.loc) {
+              if (!e.type && items.location === e.loc) {
                 items.counts[e.index] = String(Math.max((Number(items.counts[e.index]) || 0) - e.qty, 0));
               }
-            } else if (e.type !== 'link' && e.type !== 'zone' && items.location === e.loc &&
-                       !saveQueue.some(q => q.type !== 'link' && q.loc === e.loc && q.index === e.index)) {
+            } else if (!e.type && items.location === e.loc &&
+                       !saveQueue.some(q => !q.type && q.loc === e.loc && q.index === e.index)) {
               // Use the sheet's total (includes other devices' counts)
               items.counts[e.index] = String(r.total);
             }
@@ -1808,6 +1961,7 @@
               '<li>' + escapeHtml(f.entry.code) +
               (f.entry.type === 'link' ? ' · SKU ' + escapeHtml(f.entry.sku) + ' (barcode update)'
                : f.entry.type === 'zone' ? ' (zone complete)'
+               : f.entry.type === 'note' ? ' (note)'
                : ' · qty ' + f.entry.qty) +
               (f.entry.zone ? ' · zone ' + escapeHtml(f.entry.zone) : '') +
               ' — ' + escapeHtml(f.error) + '</li>').join('') +
@@ -2022,7 +2176,7 @@
       pickModal.classList.add('open');
     }
 
-    function closePick() { pickModal.classList.remove('open'); }
+    function closePick() { pickModal.classList.remove('open'); pendingAfterCheck = null; }
     function pickMsg(t) { document.getElementById('pickMsg').textContent = t || ''; }
 
     // Finished a change: stay on the scan screen with the new choice
@@ -2105,6 +2259,7 @@
     // Zone (required = just changed to a location that needs one: no Cancel)
     function openZonePick(required) {
       if (!state.zones) return; // this location has no zones
+      refreshZoneDone();
       openPick(required ? 'Choose a zone for ' + state.location : 'Change zone',
         '<div class="input-row">' +
           '<input type="text" id="pickZoneInput" autocomplete="off" placeholder="Zone">' +
@@ -2144,6 +2299,102 @@
       const zoneBtn = e.target.closest('.zone-btn');
       if (zoneBtn) changeZone(zoneBtn.dataset.zone);
     });
+
+    /* ---------- last 5 items counted ----------
+     * Kept on this device, for the person logged in (by initials) and the
+     * current location.
+     */
+    const RECENT_KEY = 'inv_recent';
+
+    function readRecent() {
+      try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch (e) { return []; }
+    }
+
+    function addRecent(idx, qty) {
+      const row = items.rows[idx];
+      if (!row) return;
+      const list = readRecent();
+      list.unshift({
+        loc: state.location, who: state.initials, zone: state.zone || '',
+        sku: row[0], name: row[1], qty: qty, t: Date.now()
+      });
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 50))); } catch (e) {}
+      renderRecent();
+    }
+
+    function renderRecent() {
+      const el = document.getElementById('recentList');
+      const list = readRecent()
+        .filter(r => r.loc === state.location && r.who === state.initials)
+        .slice(0, 5);
+      el.innerHTML = list.length
+        ? '<h4>Last ' + list.length + ' counted</h4><div class="recent-list">' + list.map(r =>
+            '<div class="recent-row">' +
+              '<span class="recent-qty">×' + r.qty + '</span>' +
+              '<span class="recent-name">' + escapeHtml(r.sku + ' ' + r.name) + '</span>' +
+              (r.zone ? '<span class="recent-zone">' + escapeHtml(r.zone) + '</span>' : '') +
+            '</div>').join('') + '</div>'
+        : '';
+    }
+
+    /* ---------- keep zone status current ----------
+     * Zones finished by anyone show as done on every device: checked when
+     * the zone list opens, when the scan screen opens, and every 30 seconds
+     * while counting.
+     */
+    let zoneRefreshBusy = false;
+
+    function refreshZoneDone() {
+      const loc = state.location;
+      if (!loc || !state.zones || !password || zoneRefreshBusy) return;
+      zoneRefreshBusy = true;
+      callServer('getZoneDone', loc)
+        .then(done => {
+          zoneRefreshBusy = false;
+          if (state.location !== loc || !Array.isArray(done)) return;
+          const set = new Set(done.map(z => String(z).toUpperCase()));
+          // keep zones this device marked that haven't reached the sheet yet
+          saveQueue.forEach(e => { if (e.type === 'zone' && e.loc === loc) set.add(String(e.zone).toUpperCase()); });
+          state.done = set;
+          if (appData && appData[loc]) appData[loc].done = done.slice();
+          updateSummary();
+          if (isStepActive('stepZone')) renderZones();
+          const pz = document.getElementById('pickZoneInput');
+          if (pz && pickOpen()) pz.dispatchEvent(new Event('input'));
+        })
+        .catch(() => { zoneRefreshBusy = false; });
+    }
+
+    setInterval(() => {
+      if (document.hidden) return;
+      if (isStepActive('stepScan') || isStepActive('stepZone')) refreshZoneDone();
+    }, 30000);
+
+    /* ---------- notes ----------
+     * Note on the item being counted. Saved to the Notes sheet in the
+     * background; then it's straight back to the count for this item.
+     */
+    function openNote() {
+      if (!current || pickOpen()) return;
+      const row = items.rows[current.index];
+      const code = current.code;
+      const sku = row[0];
+      const desc = row[1];
+      openPick('Add a note',
+        '<div style="text-align:center;color:var(--muted);margin-bottom:10px">' + escapeHtml(sku + ' ' + desc) + '</div>' +
+        '<textarea id="noteText" rows="4" maxlength="500" placeholder="Type a note" ' +
+          'style="width:100%;padding:12px;font:inherit;font-size:1.05rem;border:2px solid var(--border);border-radius:10px;resize:vertical"></textarea>' +
+        '<button type="button" class="save-btn" id="noteSave" style="width:100%;margin-top:12px;padding:14px 0;font-size:1.1rem;font-weight:bold;border-radius:10px;cursor:pointer">Save note</button>');
+      const ta = document.getElementById('noteText');
+      setTimeout(() => ta.focus(), 50);
+      document.getElementById('noteSave').addEventListener('click', () => {
+        const note = ta.value.trim();
+        if (!note) { pickMsg('Type a note first.'); return; }
+        queueEntry({ type: 'note', loc: state.location, sku: sku, code: code, desc: desc, note: note });
+        closePick();
+        setSaveStatus('✓ Note added. Now enter the count', 'ok');
+      });
+    }
 
     /* ---------- zone complete ---------- */
 
@@ -2232,8 +2483,13 @@
               s.units.toLocaleString() + ' units</div>'
           : '<div class="st-sub" style="margin-top:8px">No items with expected stock</div>';
 
+        // % done by SKUs scanned vs SKUs expected (max 100%)
+        const pctHtml = '<div class="st-pct"><b>' + (s.pctDone || 0) + '%</b> done' +
+          '<span class="st-sub"> · SKUs scanned vs. expected</span></div>';
+
         return '<div class="st-loc">' +
           '<div class="st-head"><b>' + loc + '</b><span class="st-sub">' + headRight + '</span></div>' +
+          pctHtml +
           zonesHtml +
           itemsHtml +
         '</div>';
@@ -2320,14 +2576,17 @@
       while (scanning) {
         const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
         if (vw && vh && camVideo.readyState >= 2) {
-          // Read the middle band of the picture (where the aim box is),
-          // scaled down a little: faster, and the reader works better
-          const cropH = Math.round(vh * 0.5);
+          // Read the middle of the picture (around the aim box, a little
+          // generous), scaled down: faster, and the reader works better
+          const side = Math.min(vw, vh);
+          const cropW = Math.round(Math.min(vw, side * 1.05));
+          const cropH = Math.round(Math.min(vh, side * 0.9));
+          const sx = Math.round((vw - cropW) / 2);
           const sy = Math.round((vh - cropH) / 2);
-          const scale = Math.min(1, 1280 / vw);
-          camCanvas.width = Math.round(vw * scale);
+          const scale = Math.min(1, 1024 / cropW);
+          camCanvas.width = Math.round(cropW * scale);
           camCanvas.height = Math.round(cropH * scale);
-          camCtx.drawImage(camVideo, 0, sy, vw, cropH, 0, 0, camCanvas.width, camCanvas.height);
+          camCtx.drawImage(camVideo, sx, sy, cropW, cropH, 0, 0, camCanvas.width, camCanvas.height);
           try {
             const found = await detector.detect(camCanvas);
             if (scanning && found && found.length) {
@@ -2435,13 +2694,19 @@
       }
     }
 
-    // Turn the camera off when the app goes to the background
+    /*
+     * App goes to the background (screen locks, another app opened):
+     * pause reading but don't turn the camera off ourselves. Turning it off
+     * makes the phone ask for permission again on return; if the phone keeps
+     * it, the camera simply resumes. If the phone did turn it off, the next
+     * tap of the scanner icon starts it again. The 10-minute idle timer still
+     * turns it off if it isn't used.
+     */
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && stream) {
-        const wasOpen = camOpen();
-        clearTimeout(idleTimer);
-        stopCamera();
-        if (wasOpen) closeCamera(false, true);
+      if (document.hidden) {
+        scanning = false;
+      } else if (camOpen() && stream && !inCamSheet()) {
+        openCamera(); // resume reading (restarts the camera only if the phone stopped it)
       }
     });
 
