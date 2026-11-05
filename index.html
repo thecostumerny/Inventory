@@ -729,6 +729,10 @@
         padding: clamp(8px, 3.4vh, 16px) 0; font-size: 1.15rem;
       }
       :is(body.on-scan #stepScan, #camSheet) .numpad button.fn { font-size: 0.8rem; }
+      /* Landscape key order: 1 2 3 4 5 [expected] / 6 7 8 9 0 ⌫ */
+      :is(body.on-scan #stepScan, #camSheet) .numpad > button { order: 3; }
+      :is(body.on-scan #stepScan, #camSheet) .numpad > button:nth-child(-n+5) { order: 1; }
+      :is(body.on-scan #stepScan, #camSheet) .numpad > #quickKey { order: 2; }
       :is(body.on-scan #stepScan, #camSheet) .numpad button.quick-key { padding: 4px 0; font-size: 0.9rem; }
       :is(body.on-scan #stepScan, #camSheet) .qty-actions { margin-top: 8px; gap: 6px; }
       :is(body.on-scan #stepScan, #camSheet) .qty-actions button { padding: 9px 0; font-size: 1rem; }
