@@ -544,7 +544,18 @@
     #camSheet { display: none; }
     #camOverlay.sheet #camMsg { display: none; }
     #camOverlay.sheet { padding: 10px 12px; }
-    #camOverlay.sheet #camView { height: 23vh; aspect-ratio: auto; } /* keeps reading */
+    #camOverlay.sheet #camView { display: none; } /* paused while counting */
+    #camOverlay.sheet #camQuick { display: none; }
+    .quick-toggle { background: transparent; color: #fff; border: 1px solid #fff; }
+    .quick-toggle.on { background: var(--ok); border-color: var(--ok); }
+    /* Quick scan on: green frame so it's obvious */
+    #camOverlay.quick .cam-guide { border-color: #66bb6a; }
+    #camOverlay.quick #camView::after {
+      content: 'QUICK SCAN +1';
+      position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      padding: 3px 10px; border-radius: 99px;
+      background: var(--ok); color: #fff; font-size: 0.8rem; font-weight: bold; letter-spacing: 0.04em;
+    }
     #camOverlay.sheet #camSheet { display: block; margin-top: 6px; }
     #camSheet #scanResult { margin-top: 0; }
     #camSheet .result.found { padding: 5px 10px; }
@@ -744,18 +755,8 @@
       .cam-actions > * { padding: 10px 0; }
       .pick-box { margin-top: 2vh; padding: 12px; }
 
-      /* camera + quantity side by side: live preview left, quantity right */
-      #camOverlay.sheet .cam-box {
-        max-width: none;
-        height: calc(100vh - 16px);
-        display: grid;
-        grid-template-columns: 1fr 46vw;
-        grid-template-rows: 1fr auto;
-        column-gap: 12px;
-      }
-      #camOverlay.sheet #camView { grid-column: 1; grid-row: 1 / span 2; height: auto; }
-      #camOverlay.sheet #camSheet { grid-column: 2; grid-row: 1; margin-top: 0; overflow-y: auto; }
-      #camOverlay.sheet .cam-actions { grid-column: 2; grid-row: 2; margin-top: 6px; }
+      /* quantity screen over the camera: use the full width */
+      #camOverlay.sheet .cam-box { max-width: 640px; }
       #camOverlay.sheet .cam-actions > * { padding: 8px 0; }
       #camSheet .result.found { padding: 6px 10px; }
       #camSheet .qty-panel { margin-top: 6px; padding: 8px 10px; }
@@ -910,6 +911,7 @@
       <div id="camMsg"></div>
       <div id="camSheet"></div>
       <div class="cam-actions">
+        <button type="button" id="camQuick" class="quick-toggle">Quick scan: Off</button>
         <button id="camClose">Close</button>
       </div>
     </div>
@@ -1562,19 +1564,8 @@
       const matches = items.index.get(key) || (items.skuIndex && items.skuIndex.get(key));
       const box = document.getElementById('scanResult');
 
-      // A new scan while an item is still open saves that item first,
-      // with the quantity entered (1 if nothing was typed)
-      if (current) {
-        if (current.qty === '' || current.qty === '0') { current.qty = '1'; current.fresh = false; }
-        const list = !current.variantOk && variantCheck(current);
-        if (list) {
-          // Confirm the variant first, then carry on with this scan
-          pendingAfterCheck = code;
-          showVariantCheck(list);
-          return;
-        }
-        saveCurrent({ fromScan: true });
-      }
+      // A new scan while an item still needs a quantity skips that item
+      if (current) setSaveStatus('Previous item was not saved', 'warn');
 
       if (!matches) {
         playWarning();
@@ -1905,34 +1896,39 @@
 
       const item = current;
       const qty = Number(item.qty);
-      const entry = {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-        loc: state.location,
-        index: item.index,
-        sku: item.sku,
-        code: item.code,
-        qty: qty,
-        zone: state.zone || '',
-        initials: state.initials
-      };
-
-      // Update "Counted so far" on this device right away
-      if (items.location === entry.loc) {
-        items.counts[item.index] = String((Number(items.counts[item.index]) || 0) + qty);
-      }
-
-      saveQueue.push(entry);
-      writeQueue();
+      if (quickMode && camOpen()) quickVariantOk.add(item.index); // confirmed once: don't ask again
+      const total = recordCount(item.index, item.code, qty);
 
       // Clear the screen right away so the next item can be scanned
       clearCurrent();
       document.getElementById('scanResult').innerHTML = '';
-      setSaveStatus('✓ Counted ' + qty + ' · Total ' + items.counts[item.index], 'ok');
+      setSaveStatus('✓ Counted ' + qty + ' · Total ' + total, 'ok');
+      if (!opts.fromScan) reopenCameraIfUsing();
+    }
 
-      addRecent(item.index, qty);
+    // Queues one count for the sheet and updates this device right away.
+    // Returns the new total for the item.
+    function recordCount(index, code, qty) {
+      const entry = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        loc: state.location,
+        index: index,
+        sku: items.rows[index][0],
+        code: code,
+        qty: qty,
+        zone: state.zone || '',
+        initials: state.initials
+      };
+      // Update "Counted so far" on this device right away
+      if (items.location === entry.loc) {
+        items.counts[index] = String((Number(items.counts[index]) || 0) + qty);
+      }
+      saveQueue.push(entry);
+      writeQueue();
+      addRecent(index, qty);
       renderSyncBar();
       sendQueue();
-      if (!opts.fromScan) reopenCameraIfUsing();
+      return items.counts[index];
     }
 
     // Adds any other write (e.g. a barcode link) to the same background queue
@@ -2202,6 +2198,10 @@
         })().catch(e => { detectorPromise = null; throw e; });
       }
       return detectorPromise;
+    }
+
+    function camIdleMsg() {
+      return quickMode ? 'Quick scan: each scan adds 1' : 'Hold the barcode inside the box';
     }
 
     function setCamMsg(msg) {
@@ -2563,7 +2563,7 @@
         try {
           const detector = await getDetector();
           if (!camOpen()) return;
-          setCamMsg('Hold the barcode inside the box');
+          setCamMsg(camIdleMsg());
           scanning = true;
           scanLoop(detector);
         } catch (e) {
@@ -2618,7 +2618,7 @@
       }
       if (!camOpen() || !stream) { stopCamera(); return; }
 
-      setCamMsg('Hold the barcode inside the box');
+      setCamMsg(camIdleMsg());
       scanning = true;
       scanLoop(detector);
     }
@@ -2683,33 +2683,82 @@
     function inCamSheet() { return camOverlayEl.classList.contains('sheet'); }
 
     /*
-     * The camera keeps reading while the quantity screen is up (it shows as a
-     * smaller preview above it). Scanning a different barcode saves the open
-     * item with its quantity (1 if nothing was typed) and opens the new one.
-     * The same barcode staying in view is ignored.
+     * Normal: a scan opens the quantity screen (the camera pauses), and
+     * Save / Skip goes straight back to scanning.
+     * Quick scan (toggle in the camera window): each scan adds 1 straight
+     * away and the camera keeps going. The same barcode staying in view is
+     * ignored; move it away for 2 seconds to count another of the same item.
+     * Anything that needs attention (not found, variant check) opens the
+     * normal screen, then quick scan carries on.
      */
     function onCameraScan(text) {
       text = String(text).trim();
-      if (!text || pickOpen()) return; // a window (variant check, note) is open
+      if (!text || pickOpen() || inCamSheet()) return;
       const key = normCode(text);
       const now = Date.now();
       // Same barcode still in view: ignore it while it stays there
-      // (move away for 2 seconds to scan it again)
       if (key === normCode(lastCamCode) && now - lastCamTime < 2000) {
         lastCamTime = now;
         return;
       }
       lastCamCode = text;
       lastCamTime = now;
-      // The item being counted is still in view: nothing to do
-      if (current && normCode(current.code) === key) return;
 
+      if (quickMode && quickAdd(text)) return;
+
+      scanning = false; // pause reading while the quantity screen is up
       clearTimeout(resumeTimer);
-      if (!inCamSheet()) enterCamSheet();
+      enterCamSheet();
+      lastScan = { key: '', time: 0 }; // the camera has its own in-view guard
       handleCode(text);
+      // Quick scan stopped for a variant check: show it straight away
+      if (quickMode && current && !current.variantOk) {
+        const list = variantCheck(current);
+        if (list) showVariantCheck(list);
+      }
       // Not found (or an error): show it briefly, then keep scanning
       resumeTimer = setTimeout(maybeResume, 1800);
     }
+
+    /* ---------- quick scan ---------- */
+    let quickMode = false;
+    try { quickMode = localStorage.getItem('inv_quick') === '1'; } catch (e) {}
+    const quickVariantOk = new Set(); // items confirmed in the variant check this session
+
+    // Adds 1 for a scanned barcode. Returns false when the normal screen is
+    // needed instead (not found, still loading, or a variant check).
+    function quickAdd(text) {
+      if (!items.index) return false;
+      const key = normCode(text);
+      const m = items.index.get(key) || (items.skuIndex && items.skuIndex.get(key));
+      if (!m) return false;                       // not found: normal screen handles it
+      const idx = m[0];
+      if (!quickVariantOk.has(idx) && variantCheck({ index: idx, qty: 1 })) return false;
+      lastScan = { key: key, time: Date.now() };  // so the scan isn't repeated elsewhere
+      playPop();
+      const total = recordCount(idx, text, 1);
+      const row = items.rows[idx];
+      flashCamMsg('+1  ' + row[0] + ' ' + row[1] + '  ·  Total ' + total);
+      setSaveStatus('✓ Counted 1 · Total ' + total, 'ok');
+      return true;
+    }
+
+    function renderQuickToggle() {
+      const btn = document.getElementById('camQuick');
+      btn.classList.toggle('on', quickMode);
+      btn.textContent = quickMode ? 'Quick scan: ON' : 'Quick scan: Off';
+      document.getElementById('camOverlay').classList.toggle('quick', quickMode);
+    }
+
+    document.getElementById('camQuick').addEventListener('click', () => {
+      quickMode = !quickMode;
+      try { localStorage.setItem('inv_quick', quickMode ? '1' : '0'); } catch (e) {}
+      renderQuickToggle();
+      if (camOpen() && !inCamSheet()) {
+        setCamMsg(camIdleMsg());
+      }
+    });
+    renderQuickToggle();
 
     function maybeResume() {
       if (!inCamSheet() || current) return;          // waiting for a quantity
@@ -2791,7 +2840,7 @@
       el.className = 'ok';
       clearTimeout(camMsgTimer);
       camMsgTimer = setTimeout(() => {
-        if (el.textContent === msg) { el.className = ''; setCamMsg('Hold the barcode inside the box'); }
+        if (el.textContent === msg) { el.className = ''; setCamMsg(camIdleMsg()); }
       }, 2000);
     }
 
