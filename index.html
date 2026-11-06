@@ -546,7 +546,7 @@
     #camOverlay.sheet { padding: 10px 12px; }
     #camOverlay.sheet #camView { display: none; } /* paused while counting */
     #camOverlay.sheet #camQuick { display: none; }
-    .quick-toggle { background: transparent; color: #fff; border: 1px solid #fff; }
+    .quick-toggle { background: transparent; color: #fff; border: 1px solid #fff; line-height: 1.2; }
     .quick-toggle.on { background: var(--ok); border-color: var(--ok); }
     /* Quick scan on: green frame so it's obvious */
     #camOverlay.quick .cam-guide { border-color: #66bb6a; }
@@ -911,7 +911,7 @@
       <div id="camMsg"></div>
       <div id="camSheet"></div>
       <div class="cam-actions">
-        <button type="button" id="camQuick" class="quick-toggle">Quick scan: Off</button>
+        <button type="button" id="camQuick" class="quick-toggle">Quick scan<br>Off</button>
         <button id="camClose">Close</button>
       </div>
     </div>
@@ -2746,7 +2746,7 @@
     function renderQuickToggle() {
       const btn = document.getElementById('camQuick');
       btn.classList.toggle('on', quickMode);
-      btn.textContent = quickMode ? 'Quick scan ON' : 'Quick scan Off';
+      btn.innerHTML = quickMode ? 'Quick scan<br>ON' : 'Quick scan<br>Off';
       document.getElementById('camOverlay').classList.toggle('quick', quickMode);
     }
 
