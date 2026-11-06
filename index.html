@@ -2686,8 +2686,8 @@
      * Normal: a scan opens the quantity screen (the camera pauses), and
      * Save / Skip goes straight back to scanning.
      * Quick scan (toggle in the camera window): each scan adds 1 straight
-     * away and the camera keeps going. The same barcode staying in view is
-     * ignored; move it away for 2 seconds to count another of the same item.
+     * away and the camera keeps going. The scanned item shows for 2 seconds,
+     * then the next scan counts, even the same barcode.
      * Anything that needs attention (not found, variant check) opens the
      * normal screen, then quick scan carries on.
      */
@@ -2696,6 +2696,12 @@
       if (!text || pickOpen() || inCamSheet()) return;
       const key = normCode(text);
       const now = Date.now();
+      // Quick scan: after each scan the item stays up for 2 seconds, then the
+      // next scan counts, even the same barcode
+      if (quickMode) {
+        if (now < quickHoldUntil) return;
+        if (quickAdd(text)) { quickHoldUntil = now + QUICK_HOLD_MS; return; }
+      }
       // Same barcode still in view: ignore it while it stays there
       if (key === normCode(lastCamCode) && now - lastCamTime < 2000) {
         lastCamTime = now;
@@ -2703,8 +2709,6 @@
       }
       lastCamCode = text;
       lastCamTime = now;
-
-      if (quickMode && quickAdd(text)) return;
 
       scanning = false; // pause reading while the quantity screen is up
       clearTimeout(resumeTimer);
@@ -2724,6 +2728,8 @@
     let quickMode = false;
     try { quickMode = localStorage.getItem('inv_quick') === '1'; } catch (e) {}
     const quickVariantOk = new Set(); // items confirmed in the variant check this session
+    const QUICK_HOLD_MS = 2000;       // how long each quick scan stays up
+    let quickHoldUntil = 0;
 
     // Adds 1 for a scanned barcode. Returns false when the normal screen is
     // needed instead (not found, still loading, or a variant check).
@@ -2738,7 +2744,7 @@
       playPop();
       const total = recordCount(idx, text, 1);
       const row = items.rows[idx];
-      flashCamMsg('+1  ' + row[0] + ' ' + row[1] + '  ·  Total ' + total);
+      flashCamMsg(row[1]); // just the description
       setSaveStatus('✓ Counted 1 · Total ' + total, 'ok');
       return true;
     }
